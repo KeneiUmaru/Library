@@ -867,7 +867,7 @@ function Lib:Window(text)
 
                 Tgle.Name = "Tgle"
                 Tgle.Parent = Toggle
-                Tgle.BackgroundColor3 = _G.Color
+                Tgle.BackgroundColor3 = Color3.fromRGB(255,255,255)
                 Tgle.Position = UDim2.new(0, -1, 0, -7.5)
                 Tgle.Size = UDim2.new(0, 22, 0, 22)
 
