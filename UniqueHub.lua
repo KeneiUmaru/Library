@@ -833,8 +833,7 @@ function Lib:Window(text)
                 local Tgle = Instance.new("Frame")
                 local UICornerTgle = Instance.new("UICorner")
                 local ButtonToggle = Instance.new("TextButton")
-                default = default or false
-                local toggle = default
+                local toggle = default or false
                 local RetrunStatsToggle = {}
                 local lock = false
 
@@ -1419,68 +1418,6 @@ function Lib:Window(text)
                     callback(set)
                 end
 
-                local function UpdateList()
-                    for i,v in pairs(option) do
-                        local ItemFrame = Instance.new("Frame")
-                        local ItemButton = Instance.new("TextButton")
-                        local UICorner = Instance.new("UICorner")
-    
-    
-                        ItemFrame.Name = "ItemFrame"
-                        ItemFrame.Parent = ScrollingDown
-                        ItemFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-                        ItemFrame.BackgroundTransparency = 1.000
-                        ItemFrame.Size = UDim2.new(0, 328, 0, 24)
-        
-                        ItemButton.Name = "ItemButton"
-                        ItemButton.Parent = ItemFrame
-                        ItemButton.BackgroundColor3 = _G.Color
-                        ItemButton.BorderSizePixel = 0
-                        ItemButton.Position = UDim2.new(0.0701219514, 0, 0, 0)
-                        ItemButton.Size = UDim2.new(0, 282, 0, 24)
-                        ItemButton.AutoButtonColor = false
-                        ItemButton.Font = Enum.Font.GothamBold
-                        ItemButton.Text = tostring(v)
-                        ItemButton.ClipsDescendants = true
-                        ItemButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-                        ItemButton.TextSize = 14.000
-        
-                        UICorner.CornerRadius = UDim.new(0, 4)
-                        UICorner.Parent = ItemButton
-    
-                        ItemButton.MouseButton1Down:Connect(function()
-                            if Tabtoggle == false then
-                                ItemButton.TextSize = 0
-                                TweenService:Create(
-                                    ItemButton,
-                                    TweenInfo.new(.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out,0.1),
-                                    {TextSize = 12}
-                                ):Play()
-                                Text.Text = tostring(text.." : "..v)
-                                CircleAnim(ItemButton,Color3.fromRGB(255,255,255),Color3.fromRGB(255,255,255))
-                                
-                                callback(v)
-                                DropToggle = false
-                                TweenService:Create(
-                                    DownFrame,
-                                    TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                                    {Size = UDim2.new(0, 328, 0, 0)}
-                                ):Play()
-                                TweenService:Create(
-                                    DropImage,
-                                    TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                                    {Rotation = 180}
-                                ):Play()
-                                TweenService:Create(
-                                    DropImage,
-                                    TweenInfo.new(0.4,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
-                                    {ImageColor3 = _G.Color}
-                                ):Play()
-                            end         
-                        end)
-                    end 
-                end
-
                 for i,v in pairs(option) do
                     local ItemFrame = Instance.new("Frame")
                     local ItemButton = Instance.new("TextButton")
@@ -1541,7 +1478,7 @@ function Lib:Window(text)
                     end)
                 end 
 
-                
+
                 ScrollingDown.CanvasSize = UDim2.new(0,0,0,ItemList.AbsoluteContentSize.Y + 10)
                 ButtonDrop.MouseButton1Click:Connect(function()
                     if Tabtoggle == false then
@@ -1642,12 +1579,11 @@ function Lib:Window(text)
                     end)
 
                     ScrollingDown.CanvasSize = UDim2.new(0,0,0,ItemList.AbsoluteContentSize.Y + 10)
-                    UpdateList()
                 end
 
                 function RetrunDrop:Clear()
                     Text.Text = tostring(text).." : "
-                    --[[DropToggle = false
+                    DropToggle = false
                     TweenService:Create(
                         DownFrame,
                         TweenInfo.new(0.2,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
@@ -1657,7 +1593,7 @@ function Lib:Window(text)
                         DropImage,
                         TweenInfo.new(0.3,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
                         {Rotation = 180}
-                    ):Play()]]
+                    ):Play()
                     for i, v in next, ScrollingDown:GetChildren() do
                         if v:IsA("Frame") then
                             v:Destroy()
@@ -1665,7 +1601,6 @@ function Lib:Window(text)
                     end
                     ScrollingDown.CanvasSize = UDim2.new(0,0,0,ItemList.AbsoluteContentSize.Y + 10)
                 end
-                UpdateList()
                 return RetrunDrop
             end
 
