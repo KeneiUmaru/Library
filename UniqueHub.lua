@@ -728,7 +728,7 @@ function Lib:Window(text)
                 
                 Btn.Name = "Btn"
                 Btn.Parent = FrameButton
-                Btn.BackgroundColor3 = _G.Color
+                Btn.BackgroundColor3 = Color3.fromRGB(255,255,255)
                 Btn.BorderColor3 = Color3.fromRGB(255,255,255)
                 Btn.BorderSizePixel = 2
                 Btn.Position = UDim2.new(0.0487804897, 0, 0.03125, 0)
@@ -1612,12 +1612,27 @@ function Lib:Window(text)
                 local ButtonDrop = Instance.new("TextButton")
                 local DropToggle = false
                 local RetrunDrop = {}
+                local StoredTableItems = {}
+                local function GetValue()
+                    if set then
+                        for i, v in next, set do
+                            if table.find(option, v) then
+                                callback(set)
+                                return text .. " : " .. table.concat(set, ", ")
+                            else
+                                return text
+                            end
+                        end
+                    else
+                        return text .. " : "
+                    end
+                end
 
                 DropFrame.Name = "DropFrame"
                 DropFrame.Parent = ScrollingMainFramePage
                 DropFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
                 DropFrame.BackgroundTransparency = 1.000
-                DropFrame.Position = UDim2.new(0, 0, 0.522648096, 0)
+                DropFrame.Position = UDim2.nZew(0, 0, 0.522648096, 0)
                 DropFrame.Size = UDim2.new(0, 328, 0, 35)
                 
                 Frame.Parent = DropFrame
@@ -1643,7 +1658,7 @@ function Lib:Window(text)
                 Text.Position = UDim2.new(0.0354317725, 0, -0.012, 0)
                 Text.Size = UDim2.new(0, 221, 0, 32)
                 Text.Font = Enum.Font.GothamBold
-                Text.Text = text.." : "..set
+                Text.Text = GetValue()
                 Text.TextColor3 = Color3.fromRGB(255, 255, 255)
                 Text.TextSize = 14.000
                 Text.TextXAlignment = Enum.TextXAlignment.Left
@@ -1693,10 +1708,6 @@ function Lib:Window(text)
                 SelectionScrollingUIPadding.Name = "SelectionScrollingUIPadding"
                 SelectionScrollingUIPadding.Parent = ScrollingDown
 
-                if set ~= nil then
-                    callback(set)
-                end
-
                 for i,v in pairs(option) do
                     local ItemFrame = Instance.new("Frame")
                     local ItemButton = Instance.new("TextButton")
@@ -1725,37 +1736,32 @@ function Lib:Window(text)
                     UICorner.CornerRadius = UDim.new(0, 4)
                     UICorner.Parent = ItemButton
 
-                    ItemButton.MouseButton1Down:Connect(function()
-                        if Tabtoggle == false then
-                            ItemButton.TextSize = 0
+                    ItemButton.MouseButton1Click:Connect(function()
+                        if not table.find(StoredTableItems, Text) then
+                            table.insert(StoredTableItems, Text)
+                            callback(StoredTableItems, Text)
+                            Text.Text = text .. " : " .. table.concat(StoredTableItems, ", ")
                             TweenService:Create(
-                                ItemButton,
-                                TweenInfo.new(.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out,0.1),
-                                {TextSize = 12}
+                            ItemButton,
+                            TweenInfo.new(.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                                {TextColor3 = Color3.fromRGB(255, 0, 0)}
                             ):Play()
-                            Text.Text = tostring(text.." : "..v)
-                            CircleAnim(ItemButton,Color3.fromRGB(255,255,255),Color3.fromRGB(255,255,255))
-                            
-                            callback(v)
-                            DropToggle = false
+                        else
                             TweenService:Create(
-                                DownFrame,
-                                TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                                {Size = UDim2.new(0, 328, 0, 0)}
+                            ItemButton,
+                            TweenInfo.new(.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                                {TextColor3 = Color3.fromRGB(255,255,255)}
                             ):Play()
-                            TweenService:Create(
-                                DropImage,
-                                TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                                {Rotation = 180}
-                            ):Play()
-                            TweenService:Create(
-                                DropImage,
-                                TweenInfo.new(0.4,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
-                                {ImageColor3 = _G.Color}
-                            ):Play()
-                        end         
+                            for i2, v2 in pairs(StoredTableItems) do
+                                if v2 == Text then
+                                    table.remove(StoredTableItems, i2)
+                                    Text.Text = text .. " : " .. table.concat(StoredTableItems, ", ")
+                                end
+                                callback(StoredTableItems, Text)
+                            end
+                        end
                     end)
-                end 
+                end
 
                 ScrollingDown.CanvasSize = UDim2.new(0,0,0,ItemList.AbsoluteContentSize.Y + 10)
                 ButtonDrop.MouseButton1Click:Connect(function()
