@@ -1,7 +1,7 @@
 
 
 do  local ui =  game:GetService("CoreGui"):FindFirstChild("MakiLib")  if ui then ui:Destroy() end end
-
+local logo = 12484979282
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -717,8 +717,6 @@ function Lib:Window(text)
                 local FrameButton = Instance.new("Frame")
                 local Btn = Instance.new("Frame")
                 local UICornerBtn = Instance.new("UICorner")
-                
-                
                 local TextLabelBtn = Instance.new("TextLabel")
                 local ButtonBtn = Instance.new("TextButton")
 
@@ -870,8 +868,8 @@ function Lib:Window(text)
                 Tgle.Name = "Tgle"
                 Tgle.Parent = Toggle
                 Tgle.BackgroundColor3 = _G.Color
-                Tgle.Position = UDim2.new(0, 0, 0, 0)
-                Tgle.Size = UDim2.new(0, 15, 0, 15)
+                Tgle.Position = UDim2.new(0, -1, 0, -7.5)
+                Tgle.Size = UDim2.new(0, 22, 0, 22)
 
                 UICornerTgle.CornerRadius = UDim.new(0, 9999)
                 UICornerTgle.Name = "UICornerTgle"
@@ -892,16 +890,14 @@ function Lib:Window(text)
                     toggle = false
                     TweenService:Create(
                         Tgle,
-                        TweenInfo.new(0.2,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                        {Position = UDim2.new(0, 0.5, 0, -7.5)}
-                    ):Play()
-                    wait()
+                        TweenInfo.new(0.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                        {Position = UDim2.new(0, -1, 0, -7.5)}
+                        ):Play()
                     TweenService:Create(
                         Toggle,
                         TweenInfo.new(0.3,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
                         {BackgroundColor3 = Color3.fromRGB(150, 150, 150)}
                     ):Play()
-
                     TweenService:Create(
                         Tgle,
                         TweenInfo.new(0.3,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
@@ -909,20 +905,20 @@ function Lib:Window(text)
                     ):Play()
                     TweenService:Create(
                         Tgle,
-                        TweenInfo.new(0.2,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                        {Size = UDim2.new(0, 32, 0, 22)}
+                        TweenInfo.new(0.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                        {Size = UDim2.new(0, 37, 0, 22)}
                     ):Play()
                     wait()
                     TweenService:Create(
                         Tgle,
-                        TweenInfo.new(0.2,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                        TweenInfo.new(0.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
                         {Size = UDim2.new(0, 22, 0, 22)}
                     ):Play()
                     wait()
                     TweenService:Create(
                         Tgle,
-                        TweenInfo.new(0.2,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                        {Position = UDim2.new(0, 0.5, 0, -7.5)}
+                        TweenInfo.new(0.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                        {Position = UDim2.new(0, -1, 0, -7.5)}
                     ):Play()
                     callback(toggle)
                 end
@@ -1887,7 +1883,7 @@ function Lib:Window(text)
             end
 
             function main:Textbox(text,placeholder,def,callback)
-                
+
             end
             return main
         end
