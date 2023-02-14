@@ -730,6 +730,7 @@ function Lib:Window(text)
                 Btn.Parent = FrameButton
                 Btn.BackgroundColor3 = _G.Color
                 Btn.BorderColor3 = Color3.fromRGB(255,255,255)
+                Btn.BackgroundTransparency = 1.000
                 Btn.BorderSizePixel = 2
                 Btn.Position = UDim2.new(0.0487804897, 0, 0.03125, 0)
                 Btn.Size = UDim2.new(0, 296, 0, 30)
