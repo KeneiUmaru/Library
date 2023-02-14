@@ -1001,6 +1001,7 @@ function Lib:Window(text)
                             callback(toggle)
                         elseif toggle == true and lock == false then
                             toggle = false
+                            CircleAnim(ButtonToggle, Color3.fromRGB(255,255,255), Color3.fromRGB(255,255,255))
                             TweenService:Create(
                                 Tgle,
                                 TweenInfo.new(0.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
