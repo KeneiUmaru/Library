@@ -240,12 +240,12 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
         IsHovering = true
 
-        Tooltip.Position = UDim2.fromOffset(Mouse.X + -15, Mouse.Y + -24)
+        Tooltip.Position = UDim2.fromOffset(Mouse.X - 30, Mouse.Y - 24)
         Tooltip.Visible = true
 
         while IsHovering do
             RunService.Heartbeat:Wait()
-            Tooltip.Position = UDim2.fromOffset(Mouse.X - 30, Mouse.Y + (24))
+            Tooltip.Position = UDim2.fromOffset(Mouse.X - 30, Mouse.Y - 24)
         end
     end)
 
