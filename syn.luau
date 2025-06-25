@@ -57,6 +57,7 @@ local injected = false
 SynapseXreal.Name = 'Synapse X'
 SynapseXreal.Parent = game.CoreGui
 SynapseXreal.ResetOnSpawn = false
+SynapseXreal.DisplayOrder = 99999999
 
 MainFrame.Name = 'MainFrame'
 MainFrame.Parent = SynapseXreal
