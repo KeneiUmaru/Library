@@ -2179,6 +2179,7 @@ do
             Text = Info.Text;
             TextXAlignment = Enum.TextXAlignment.Left;
             ZIndex = 6;
+            RichText = true;
             Parent = ToggleInner;
         });
 
