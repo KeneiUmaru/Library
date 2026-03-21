@@ -1452,7 +1452,7 @@ do
             Size = UDim2.new(1, -4, 0, 15);
             TextSize = 14;
             Text = Text;
-            TextWrapped = DoesWrap or false,
+            TextWrapped = false,
             TextXAlignment = Enum.TextXAlignment.Left;
             ZIndex = 5;
             RichText = true;
@@ -1486,45 +1486,11 @@ do
 			Groupbox:Resize();
 		end
 
-		function Label:SetColor(Color)
-			TextLabel.Color = Color;
-
-			if DoesWrap then
-				local Y = select(2, Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(TextLabel.AbsoluteSize.X, math.huge)));
-				TextLabel.Size = UDim2.new(1, -4, 0, Y);
-			end;
-
-			Groupbox:Resize();
-		end;
-
-		function Label:AddText(text)
-			textFunc = {};
-			TextLabel.Text = TextLabel.Text .. text
-
-			function textFunc:SetColor(Color)
-				TextLabel.Color = Color or Color3.new(1,1,1);
-
-				if DoesWrap then
-					local Y = select(2, Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(TextLabel.AbsoluteSize.X, math.huge)));
-					TextLabel.Size = UDim2.new(1, -4, 0, Y);
-				end;
-
-				Groupbox:Resize();
-			end;
-		end
-
-        --[[
-            local Label = Groupbox:AddLabel("Current Coins : ")
-            Label:AddText("30"):SetColor(Color3.fromRGB(0,255,0))
-            
-            wtf?
-        ]]
-
 		if (not DoesWrap) then
 			setmetatable(Label, BaseAddons);
 		end;
 
-		Groupbox:AddBlank(5);
+		Groupbox:AddBlank(1);
 		Groupbox:Resize();
 
 		return Label;
