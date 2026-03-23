@@ -407,7 +407,8 @@ function Library:MapValue(Value, MinA, MaxA, MinB, MaxB)
 end;
 
 function Library:GetTextBounds(Text, Font, Size, Resolution)
-	local Bounds = TextService:GetTextSize(Text, Size, Font, Resolution or Vector2.new(1920, 1080))
+	local PlainText = Text:gsub("<[^>]+>", "")
+	local Bounds = TextService:GetTextSize(PlainText, Size, Font, Resolution or Vector2.new(1920, 1080))
 	return Bounds.X, Bounds.Y
 end;
 
@@ -1490,7 +1491,7 @@ do
 			setmetatable(Label, BaseAddons);
 		end;
 
-		Groupbox:AddBlank(1);
+		Groupbox:AddBlank(5);
 		Groupbox:Resize();
 
 		return Label;
