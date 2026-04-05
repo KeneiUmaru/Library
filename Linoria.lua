@@ -170,33 +170,54 @@ function Library:CreateLabel(Properties, IsHud)
 	return Library:Create(_Instance, Properties);
 end;
 
-function Library:MakeDraggable(Instance, Cutoff)
-	Instance.Active = true;
+function Library:MakeDraggable(instance, cutoff)
+	local dragging = false
+	local dragInput
+	local startPos
+	local startFramePos
 
-	Instance.InputBegan:Connect(function(Input)
-		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-			local ObjPos = Vector2.new(
-				Mouse.X - Instance.AbsolutePosition.X,
-				Mouse.Y - Instance.AbsolutePosition.Y
-			);
+	cutoff = cutoff or 40
 
-			if ObjPos.Y > (Cutoff or 40) then
-				return;
-			end;
+	instance.Active = true
 
-			while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or InputService:IsMouseButtonPressed(Enum.UserInputType.Touch) do
-				Instance.Position = UDim2.new(
-					0,
-					Mouse.X - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
-					0,
-					Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
-				);
+	instance.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			
+			local mousePos = InputService:GetMouseLocation()
+			local objPos = mousePos - instance.AbsolutePosition
 
-				RenderStepped:Wait();
-			end;
-		end;
+			if objPos.Y > cutoff then
+				return
+			end
+
+			dragging = true
+			startPos = mousePos
+			startFramePos = instance.Position
+			dragInput = input
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
 	end)
-end;
+
+	InputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local mousePos = InputService:GetMouseLocation()
+			local delta = mousePos - startPos
+
+			instance.Position = UDim2.new(
+				startFramePos.X.Scale,
+				startFramePos.X.Offset + delta.X,
+				startFramePos.Y.Scale,
+				startFramePos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
 
 function Library:AddToolTip(InfoStr, HoverInstance)
 	local X, Y = Library:GetTextBounds(InfoStr, Library.Font, 14);
