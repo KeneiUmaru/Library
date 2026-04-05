@@ -192,7 +192,7 @@ function Library:MakeDraggable(Instance, Cutoff)
 					Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
 				);
 
-				RenderStepped:Wait();
+				task.wait();
 			end;
 		end;
 	end)
@@ -1004,7 +1004,7 @@ do
 					ColorPicker.Vib = 1 - ((MouseY - MinY) / (MaxY - MinY));
 					ColorPicker:Display();
 
-					RenderStepped:Wait();
+					task.wait();
 				end;
 
 				Library:AttemptSave();
@@ -1021,7 +1021,7 @@ do
 					ColorPicker.Hue = ((MouseY - MinY) / (MaxY - MinY));
 					ColorPicker:Display();
 
-					RenderStepped:Wait();
+					task.wait();
 				end;
 
 				Library:AttemptSave();
@@ -1054,7 +1054,7 @@ do
 
 						ColorPicker:Display();
 
-						RenderStepped:Wait();
+						task.wait();
 					end;
 
 					Library:AttemptSave();
@@ -2258,7 +2258,7 @@ do
 						Library:SafeCallback(Slider.Changed, Slider.Value);
 					end;
 
-					RenderStepped:Wait();
+					task.wait();
 				end;
 
 				Library:AttemptSave();
@@ -3751,7 +3751,7 @@ function Library:CreateWindow(...)
 					CursorOutline.PointB = Cursor.PointB;
 					CursorOutline.PointC = Cursor.PointC;
 
-					RenderStepped:Wait();
+					task.wait();
 				end;
 
 				InputService.MouseIconEnabled = State;
@@ -3788,7 +3788,7 @@ function Library:CreateWindow(...)
 				end;
 
 				if Cache[Prop] == 1 then
-					--continue;
+					continue;
 				end;
 
 				TweenService:Create(Desc, TweenInfo.new(FadeTime, Enum.EasingStyle.Linear), { [Prop] = Toggled and Cache[Prop] or 1 }):Play();
