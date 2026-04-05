@@ -192,7 +192,7 @@ function Library:MakeDraggable(Instance, Cutoff)
 					Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
 				);
 
-				task.wait();
+				RenderStepped:Wait();
 			end;
 		end;
 	end)
@@ -1004,7 +1004,7 @@ do
 					ColorPicker.Vib = 1 - ((MouseY - MinY) / (MaxY - MinY));
 					ColorPicker:Display();
 
-					task.wait();
+					RenderStepped:Wait();
 				end;
 
 				Library:AttemptSave();
@@ -1021,7 +1021,7 @@ do
 					ColorPicker.Hue = ((MouseY - MinY) / (MaxY - MinY));
 					ColorPicker:Display();
 
-					task.wait();
+					RenderStepped:Wait();
 				end;
 
 				Library:AttemptSave();
@@ -1054,7 +1054,7 @@ do
 
 						ColorPicker:Display();
 
-						task.wait();
+						RenderStepped:Wait();
 					end;
 
 					Library:AttemptSave();
@@ -2258,7 +2258,7 @@ do
 						Library:SafeCallback(Slider.Changed, Slider.Value);
 					end;
 
-					task.wait();
+					RenderStepped:Wait();
 				end;
 
 				Library:AttemptSave();
@@ -3751,7 +3751,7 @@ function Library:CreateWindow(...)
 					CursorOutline.PointB = Cursor.PointB;
 					CursorOutline.PointC = Cursor.PointC;
 
-					task.wait();
+					RenderStepped:Wait();
 				end;
 
 				InputService.MouseIconEnabled = State;
