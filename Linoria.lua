@@ -12,6 +12,14 @@
         Library:Toggle(state?)                    -- eased fade + scale open/close, interruptible; pass true/false to force
         Library:SetRainbowAccent(on, gradient?)   -- hue-cycling accent, optionally spread down the window
         Library:SetKeybindFrameVisibility(on)     -- keybind HUD, auto-hidden while it has no entries
+        Library:SetScale(n)                       -- scale the window and its popups (0.5 - 2)
+        Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
+                                                  -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
+        Library.Version                           -- API version number, see bloxspin/kenya_client.lua for the check
+        Library.RainbowSpeed / Library.GradientSpread / Library.MenuFadeTime -- live-tunable numbers
+        Library.GradientMode ('Rainbow'|'Custom'), GradientDirection ('Vertical'|'Horizontal'|'Diagonal'),
+        GradientReverse, GradientColorA/B, RainbowSaturation, RainbowValue -- accent gradient options;
+        call Library:RefreshAccent() after changing them while nothing is animating
         Library.NotifyOnError = true              -- turn callback errors into notifications instead of console errors
         Library.ThemeManager / Library.SaveManager are bundled (no extra HttpGet needed)
         Sliders and tab areas size from the real window, so custom CreateWindow sizes work
@@ -47,9 +55,26 @@ local Options = {};
 getgenv().Toggles = Toggles;
 getgenv().Options = Options;
 
+-- The menu lives in CoreGui, which a thread with game-script identity cannot touch
+-- ("The current thread cannot access 'Instance' (lacking capability Plugin)"). That happens when UI
+-- setters are called from a game callback: a hooked game function, OnClientEvent, a game-fired signal.
+-- A BindableFunction's OnInvoke callback set from THIS thread runs with this thread's identity even when
+-- invoked from a low one, and Invoke is always synchronous (unlike BindableEvent handlers, which are
+-- queued when the game uses deferred signals). Setters re-dispatch themselves through it when needed
+-- (see Library:RunOnUIThread).
+local GetThreadIdentity = getthreadidentity or (syn and syn.get_thread_identity) or getidentity;
+local UIThreadFunction = Instance.new('BindableFunction');
+local UIThreadBypass = false;   -- set while a hop has failed and the call is retried directly, so the guard cannot recurse
+
+UIThreadFunction.OnInvoke = function(Fn, Args)
+    local Result = table.pack(pcall(Fn, table.unpack(Args, 1, Args.n)));
+    return true, Result;
+end;
+
 local Library = {
     Registry = {};
     RegistryMap = {};
+    UIThreadFunction = UIThreadFunction;
 
     HudRegistry = {};
 
@@ -68,11 +93,38 @@ local Library = {
 
     Signals = {};
     ScreenGui = ScreenGui;
+
+    Version = 3;          -- bump when the public API changes; clients check this against the GitHub copy
+    UIScale = 1;          -- window + popup scale, see Library:SetScale
+    Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
+    RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
+    GradientSpread = 0.35;-- hue range spread across the window when GradientAccent is on (rainbow mode)
+    MenuFadeTime = nil;   -- overrides the window's MenuFadeTime when set (seconds)
+
+    -- Accent gradient options (see Library:GetAccentAt)
+    GradientMode = 'Rainbow';          -- 'Rainbow' (hue wheel) or 'Custom' (blend GradientColorA -> GradientColorB)
+    GradientDirection = 'Vertical';    -- 'Vertical', 'Horizontal' or 'Diagonal'
+    GradientReverse = false;           -- flip the gradient direction
+    GradientColorA = Color3.fromRGB(0, 170, 255);
+    GradientColorB = Color3.fromRGB(170, 0, 255);
+    RainbowSaturation = 0.8;
+    RainbowValue = 1;
 };
 
 local RainbowStep = 0
 local Hue = 0
+local AccentPhase = 0
 local LastRainbowAccent = nil
+
+local function PingPong(X)
+    X = X % 1;
+    return 1 - math.abs(2 * X - 1);
+end;
+
+-- True while the library (not the theme) is driving the accent color.
+local function AccentIsDynamic()
+    return Library.RainbowAccent or Library.GradientAccent or Library.GradientMode == 'Custom';
+end;
 
 table.insert(Library.Signals, RenderStepped:Connect(function(Delta)
     RainbowStep = RainbowStep + Delta
@@ -80,22 +132,24 @@ table.insert(Library.Signals, RenderStepped:Connect(function(Delta)
     if RainbowStep >= (1 / 60) then
         RainbowStep = 0
 
-        Hue = Hue + (1 / 400);
-
-        if Hue > 1 then
-            Hue = 0;
-        end;
-
+        -- Public hue counter (kept for scripts that read CurrentRainbowColor); always cycles.
+        Hue = (Hue + (1 / 400)) % 1;
         Library.CurrentRainbowHue = Hue;
-        Library.CurrentRainbowColor = Color3.fromHSV(Hue, 0.8, 1);
+        Library.CurrentRainbowColor = Color3.fromHSV(Hue, Library.RainbowSaturation or 0.8, Library.RainbowValue or 1);
 
+        -- Accent animation phase: only advances while RainbowAccent (animate) is on.
         if Library.RainbowAccent then
-            -- A theme applied while rainbow runs changes AccentColor underneath us; keep that as the restore color.
+            AccentPhase = (AccentPhase + (1 / 400) * (Library.RainbowSpeed or 1)) % 1;
+        end;
+        Library.AccentPhase = AccentPhase;
+
+        if AccentIsDynamic() then
+            -- A theme applied while we drive the accent changes AccentColor underneath us; keep that as the restore color.
             if LastRainbowAccent and Library.AccentColor ~= LastRainbowAccent then
                 Library.StaticAccentColor = Library.AccentColor;
             end
 
-            Library.AccentColor = Library.CurrentRainbowColor;
+            Library.AccentColor = Library:GetAccentAt(0);
             Library.AccentColorDark = Library:GetDarkerColor(Library.AccentColor);
             LastRainbowAccent = Library.AccentColor;
 
@@ -106,20 +160,60 @@ table.insert(Library.Signals, RenderStepped:Connect(function(Delta)
     end
 end))
 
--- Recolors only the accent-bound registry entries. With GradientAccent on, each element's hue is
--- offset by its vertical position inside the main window, so the accent fades down the menu
--- (e.g. cyan at the top running into green lower down) instead of being one flat color.
+-- Accent color at a position along the gradient (0 = start, 1 = end).
+--   Rainbow mode: hue = phase - Fraction * GradientSpread (so the hue wheel is spread across the window).
+--   Custom mode:  blend GradientColorA -> GradientColorB; with animation on, the blend flows across the window.
+-- Without GradientAccent every element uses Fraction 0, i.e. one flat (possibly animated) color.
+function Library:GetAccentAt(Fraction)
+    local Gradient = Library.GradientAccent;
+
+    if not Gradient then
+        Fraction = 0;
+    elseif Library.GradientReverse then
+        Fraction = 1 - Fraction;
+    end;
+
+    if Library.GradientMode == 'Custom' then
+        local A, B = Library.GradientColorA or Library.AccentColor, Library.GradientColorB or Library.AccentColor;
+        local T = Fraction;
+
+        if Library.RainbowAccent then
+            T = PingPong(Fraction * (Gradient and 1 or 0) + AccentPhase);
+        end;
+
+        return A:Lerp(B, T);
+    end;
+
+    local H = AccentPhase - Fraction * (Library.GradientSpread or 0.35);
+    return Color3.fromHSV(H % 1, Library.RainbowSaturation or 0.8, Library.RainbowValue or 1);
+end;
+
+-- Position of an element inside the main window (0..1) along the configured gradient direction.
+function Library:GetGradientFraction(Instance)
+    local Holder = Library.MainWindow;
+
+    if not Holder then
+        return 0;
+    end;
+
+    local Pos, Size = Holder.AbsolutePosition, Holder.AbsoluteSize;
+    local FX = math.clamp((Instance.AbsolutePosition.X - Pos.X) / math.max(Size.X, 1), 0, 1);
+    local FY = math.clamp((Instance.AbsolutePosition.Y - Pos.Y) / math.max(Size.Y, 1), 0, 1);
+    local Direction = Library.GradientDirection;
+
+    if Direction == 'Horizontal' then
+        return FX;
+    elseif Direction == 'Diagonal' then
+        return (FX + FY) / 2;
+    end;
+
+    return FY;
+end;
+
+-- Recolors only the accent-bound registry entries. With GradientAccent on, each element gets the accent
+-- color for its position inside the main window (see GetAccentAt / GetGradientFraction).
 function Library:UpdateAccentColors(List)
     local Gradient = Library.GradientAccent;
-    local BaseHue = Library.CurrentRainbowHue or 0;
-    local Spread = Library.GradientSpread or 0.35;
-    local Holder = Library.MainWindow;
-    local Top, Height = 0, 1;
-
-    if Gradient and Holder then
-        Top = Holder.AbsolutePosition.Y;
-        Height = math.max(Holder.AbsoluteSize.Y, 1);
-    end
 
     for _, Object in next, (List or Library.Registry) do
         for Property, ColorIdx in next, Object.Properties do
@@ -127,8 +221,7 @@ function Library:UpdateAccentColors(List)
                 local Color = Library.AccentColor;
 
                 if Gradient then
-                    local Fraction = math.clamp((Object.Instance.AbsolutePosition.Y - Top) / Height, 0, 1);
-                    Color = Color3.fromHSV((BaseHue - Fraction * Spread) % 1, 0.8, 1);
+                    Color = Library:GetAccentAt(Library:GetGradientFraction(Object.Instance));
                 end
 
                 if ColorIdx == 'AccentColorDark' then
@@ -139,16 +232,46 @@ function Library:UpdateAccentColors(List)
             end
         end
     end
+
+    if Library.WindowBorderGradient and (not List) then
+        local Direction = Library.GradientDirection;
+        Library.WindowBorderGradient.Rotation = (Direction == 'Horizontal' and 0) or (Direction == 'Diagonal' and 45) or 90;
+        Library.WindowBorderGradient.Color = Library:GetAccentSequence();
+    end;
 end
+
+-- ColorSequence matching the current accent: a flat accent color normally, or the start-to-end color range
+-- while the gradient accent is active. Used for the window border gradient.
+function Library:GetAccentSequence()
+    if not Library.GradientAccent then
+        return ColorSequence.new(Library.AccentColor);
+    end;
+
+    local Keypoints = {};
+    local Steps = 8;
+
+    for i = 0, Steps do
+        local t = i / Steps;
+        table.insert(Keypoints, ColorSequenceKeypoint.new(t, Library:GetAccentAt(t)));
+    end;
+
+    return ColorSequence.new(Keypoints);
+end;
 
 -- Cycles the accent color through the hue wheel (toggles, sliders, groupbox highlights, etc.)
 -- Pass Gradient = true to spread the hue down the window instead of coloring everything the same.
 function Library:SetRainbowAccent(Bool, Gradient)
     Library.RainbowAccent = (not not Bool);
     Library.GradientAccent = (not not Gradient);
+    Library:RefreshAccent();
+end
+
+-- Call after changing GradientMode / colors / direction so a static (non-animated) accent repaints,
+-- and so the theme accent comes back when nothing dynamic is left on.
+function Library:RefreshAccent()
     LastRainbowAccent = nil;
 
-    if Library.RainbowAccent then
+    if AccentIsDynamic() then
         Library.StaticAccentColor = Library.StaticAccentColor or Library.AccentColor;
     else
         Library.AccentColor = Library.StaticAccentColor or Library.AccentColor;
@@ -179,6 +302,41 @@ local function GetTeamsString()
     table.sort(TeamList, function(str1, str2) return str1 < str2 end);
     
     return TeamList;
+end;
+
+-- True when the calling thread lacks the identity needed to touch the menu (see UIThreadFunction above).
+function Library:NeedsUIThread()
+    if UIThreadBypass or type(GetThreadIdentity) ~= 'function' then
+        return false;
+    end;
+
+    local Ok, Identity = pcall(GetThreadIdentity);
+    return Ok and type(Identity) == 'number' and Identity < 4;
+end;
+
+-- Runs Fn(...) on the library's own (executor-identity) thread, synchronously, and returns its results.
+-- Use this around any menu update made from a game callback.
+function Library:RunOnUIThread(Fn, ...)
+    if not Library:NeedsUIThread() then
+        return Fn(...);
+    end;
+
+    local Args = table.pack(...);
+    local Invoked, Ran, Result = pcall(UIThreadFunction.Invoke, UIThreadFunction, Fn, Args);
+
+    if not (Invoked and Ran and type(Result) == 'table') then
+        -- The hop is unavailable (library unloaded, executor cannot pass functions through bindables, ...):
+        -- run directly with the guard bypassed so this can never re-enter itself.
+        UIThreadBypass = true;
+        Result = table.pack(pcall(Fn, table.unpack(Args, 1, Args.n)));
+        UIThreadBypass = false;
+    end;
+
+    if not Result[1] then
+        error(Result[2], 0);
+    end;
+
+    return table.unpack(Result, 2, Result.n);
 end;
 
 function Library:SafeCallback(f, ...)
@@ -269,9 +427,9 @@ function Library:MakeDraggable(Instance, Cutoff)
             while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
                 Instance.Position = UDim2.new(
                     0,
-                    Mouse.X - ObjPos.X + (Instance.Size.X.Offset * Instance.AnchorPoint.X),
+                    Mouse.X - ObjPos.X + (Instance.AbsoluteSize.X * Instance.AnchorPoint.X),
                     0,
-                    Mouse.Y - ObjPos.Y + (Instance.Size.Y.Offset * Instance.AnchorPoint.Y)
+                    Mouse.Y - ObjPos.Y + (Instance.AbsoluteSize.Y * Instance.AnchorPoint.Y)
                 );
 
                 RenderStepped:Wait();
@@ -495,6 +653,38 @@ Library:GiveSignal(ScreenGui.DescendantRemoving:Connect(function(Instance)
     end;
 end))
 
+-- Popups (dropdown lists, color pickers, key/mode menus) live directly under the ScreenGui, so they get
+-- their own UIScale that follows Library:SetScale.
+function Library:RegisterPopup(Frame)
+    Library:Create('UIScale', {
+        Scale = Library.UIScale;
+        Parent = Frame;
+    });
+
+    table.insert(Library.Popups, Frame);
+end;
+
+-- Scales the main window and every popup. 1 = default size.
+function Library:SetScale(Scale)
+    Scale = math.clamp(tonumber(Scale) or 1, 0.5, 2);
+    Library.UIScale = Scale;
+
+    if Library.WindowScale then
+        Library.WindowScale.Scale = Scale;
+    end;
+
+    for Idx = #Library.Popups, 1, -1 do
+        local Frame = Library.Popups[Idx];
+        local PopupScale = Frame and Frame:FindFirstChildOfClass('UIScale');
+
+        if PopupScale then
+            PopupScale.Scale = Scale;
+        else
+            table.remove(Library.Popups, Idx);
+        end;
+    end;
+end;
+
 local BaseAddons = {};
 
 do
@@ -562,6 +752,8 @@ do
         DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
             PickerFrameOuter.Position = UDim2.fromOffset(DisplayFrame.AbsolutePosition.X, DisplayFrame.AbsolutePosition.Y + 18);
         end)
+
+        Library:RegisterPopup(PickerFrameOuter);
 
         local PickerFrameInner = Library:Create('Frame', {
             BackgroundColor3 = Library.BackgroundColor;
@@ -767,6 +959,8 @@ do
                 Visible = false,
                 Parent = ScreenGui
             })
+
+            Library:RegisterPopup(ContextMenu.Container);
 
             ContextMenu.Inner = Library:Create('Frame', {
                 BackgroundColor3 = Library.BackgroundColor;
@@ -975,6 +1169,10 @@ do
         end;
 
         function ColorPicker:SetValue(HSV, Transparency)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(ColorPicker.SetValue, ColorPicker, HSV, Transparency);
+            end;
+
             local Color = Color3.fromHSV(HSV[1], HSV[2], HSV[3]);
 
             ColorPicker.Transparency = Transparency or 0;
@@ -983,6 +1181,10 @@ do
         end;
 
         function ColorPicker:SetValueRGB(Color, Transparency)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(ColorPicker.SetValueRGB, ColorPicker, Color, Transparency);
+            end;
+
             ColorPicker.Transparency = Transparency or 0;
             ColorPicker:SetHSVFromRGB(Color);
             ColorPicker:Display();
@@ -1145,6 +1347,14 @@ do
             Parent = PickInner;
         });
 
+        -- Widen the key box to fit long key names (RightShift, LeftControl, ...) instead of clipping them.
+        local function FitPicker()
+            local X = Library:GetTextBounds(DisplayLabel.Text, Library.Font, 13);
+            PickOuter.Size = UDim2.new(0, math.max(28, X + 8), 0, 15);
+        end;
+
+        FitPicker();
+
         local ModeSelectOuter = Library:Create('Frame', {
             BorderColor3 = Color3.new(0, 0, 0);
             Position = UDim2.fromOffset(ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X + 4, ToggleLabel.AbsolutePosition.Y + 1);
@@ -1157,6 +1367,8 @@ do
         ToggleLabel:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
             ModeSelectOuter.Position = UDim2.fromOffset(ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X + 4, ToggleLabel.AbsolutePosition.Y + 1);
         end);
+
+        Library:RegisterPopup(ModeSelectOuter);
 
         local ModeSelectInner = Library:Create('Frame', {
             BackgroundColor3 = Library.BackgroundColor;
@@ -1275,8 +1487,13 @@ do
         end;
 
         function KeyPicker:SetValue(Data)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(KeyPicker.SetValue, KeyPicker, Data);
+            end;
+
             local Key, Mode = Data[1], Data[2];
             DisplayLabel.Text = Key;
+                    FitPicker();
             KeyPicker.Value = Key;
             ModeButtons[Mode]:Select();
             KeyPicker:Update();
@@ -1346,6 +1563,7 @@ do
                     Picking = false;
 
                     DisplayLabel.Text = Key;
+                    FitPicker();
                     KeyPicker.Value = Key;
 
                     Library:SafeCallback(KeyPicker.ChangedCallback, Input.KeyCode or Input.UserInputType)
@@ -1462,6 +1680,10 @@ do
         Label.Container = Container;
 
         function Label:SetText(Text)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Label.SetText, Label, Text);
+            end;
+
             TextLabel.Text = Text
 
             if DoesWrap then
@@ -1809,6 +2031,10 @@ do
         Library:ApplyTextStroke(Box);
 
         function Textbox:SetValue(Text)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Textbox.SetValue, Textbox, Text);
+            end;
+
             if Info.MaxLength and #Text > Info.MaxLength then
                 Text = Text:sub(1, Info.MaxLength);
             end;
@@ -1988,6 +2214,10 @@ do
         end;
 
         function Toggle:SetValue(Bool)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Toggle.SetValue, Toggle, Bool);
+            end;
+
             Bool = (not not Bool);
 
             Toggle.Value = Bool;
@@ -2177,6 +2407,10 @@ do
         end;
 
         function Slider:SetValue(Str)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Slider.SetValue, Slider, Str);
+            end;
+
             local Num = tonumber(Str);
 
             if (not Num) then
@@ -2194,13 +2428,11 @@ do
 
         SliderInner.InputBegan:Connect(function(Input)
             if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
-                local mPos = Mouse.X;
-                local gPos = Fill.Size.X.Offset;
-                local Diff = mPos - (Fill.AbsolutePosition.X + gPos);
-
                 while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
-                    local nMPos = Mouse.X;
-                    local nX = math.clamp(gPos + (nMPos - mPos) + Diff, 0, Slider.MaxSize);
+                    -- Mouse is in screen pixels, the track width (MaxSize) is unscaled; divide by the window
+                    -- scale so the fill tracks the cursor at any UI scale.
+                    local Scale = Library.WindowScale and Library.WindowScale.Scale or 1;
+                    local nX = math.clamp((Mouse.X - SliderInner.AbsolutePosition.X) / Scale, 0, Slider.MaxSize);
 
                     local nValue = Slider:GetValueFromXOffset(nX);
                     local OldValue = Slider.Value;
@@ -2373,13 +2605,15 @@ do
         end;
 
         local function RecalculateListSize(YSize)
-            ListOuter.Size = UDim2.fromOffset(DropdownOuter.AbsoluteSize.X, YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
+            ListOuter.Size = UDim2.fromOffset(DropdownOuter.AbsoluteSize.X / (Library.UIScale or 1), YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
         end;
 
         RecalculateListPosition();
         RecalculateListSize();
 
         DropdownOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(RecalculateListPosition);
+
+        Library:RegisterPopup(ListOuter);
 
         local ListInner = Library:Create('Frame', {
             BackgroundColor3 = Library.MainColor;
@@ -2574,6 +2808,10 @@ do
         end;
 
         function Dropdown:SetValues(NewValues)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Dropdown.SetValues, Dropdown, NewValues);
+            end;
+
             if NewValues then
                 Dropdown.Values = NewValues;
             end;
@@ -2599,6 +2837,10 @@ do
         end;
 
         function Dropdown:SetValue(Val)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Dropdown.SetValue, Dropdown, Val);
+            end;
+
             if Dropdown.Multi then
                 local nTable = {};
 
@@ -2926,7 +3168,8 @@ do
 end;
 
 function Library:SetWatermarkVisibility(Bool)
-    Library.Watermark.Visible = Bool;
+    Library.WatermarkEnabled = (not not Bool);
+    Library.Watermark.Visible = Library.WatermarkEnabled;
 end;
 
 -- Resizes the keybind list HUD to fit its entries. The frame only shows while it is enabled AND at
@@ -2952,14 +3195,25 @@ function Library:SetKeybindFrameVisibility(Bool)
 end;
 
 function Library:SetWatermark(Text)
+    if Library:NeedsUIThread() then
+        return Library:RunOnUIThread(Library.SetWatermark, Library, Text);
+    end;
+
     local X, Y = Library:GetTextBounds(Text, Library.Font, 14);
     Library.Watermark.Size = UDim2.new(0, X + 15, 0, (Y * 1.5) + 3);
-    Library:SetWatermarkVisibility(true)
+
+    if Library.WatermarkEnabled == nil then
+        Library:SetWatermarkVisibility(true);
+    end;
 
     Library.WatermarkText.Text = Text;
 end;
 
 function Library:Notify(Text, Time)
+    if Library:NeedsUIThread() then
+        return Library:RunOnUIThread(Library.Notify, Library, Text, Time);
+    end;
+
     local XSize, YSize = Library:GetTextBounds(Text, Library.Font, 14);
 
     YSize = YSize + 7
@@ -3092,8 +3346,7 @@ function Library:CreateWindow(...)
 
     local Inner = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
-        BorderColor3 = Library.AccentColor;
-        BorderMode = Enum.BorderMode.Inset;
+        BorderSizePixel = 0;
         Position = UDim2.new(0, 1, 0, 1);
         Size = UDim2.new(1, -2, 1, -2);
         ZIndex = 1;
@@ -3102,8 +3355,31 @@ function Library:CreateWindow(...)
 
     Library:AddToRegistry(Inner, {
         BackgroundColor3 = 'MainColor';
-        BorderColor3 = 'AccentColor';
     });
+
+    -- The accent border is a 1px stroke with a vertical gradient instead of a flat BorderColor3, so it can
+    -- carry the same top-to-bottom hue range as the gradient accent (see Library:GetAccentSequence).
+    local BorderStroke = Library:Create('UIStroke', {
+        Color = Color3.new(1, 1, 1);
+        Thickness = 1;
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+        LineJoinMode = Enum.LineJoinMode.Miter;
+        Parent = Inner;
+    });
+
+    local BorderGradient = Library:Create('UIGradient', {
+        Color = Library:GetAccentSequence();
+        Rotation = 90;
+        Parent = BorderStroke;
+    });
+
+    Library:AddToRegistry(BorderGradient, {
+        Color = function()
+            return Library:GetAccentSequence();
+        end;
+    });
+
+    Library.WindowBorderGradient = Library.WindowBorderGradient or BorderGradient;
 
     local WindowLabel = Library:CreateLabel({
         Position = UDim2.new(0.5, 0, 0, 0);
@@ -3630,7 +3906,7 @@ function Library:CreateWindow(...)
 
     -- Scales the whole window slightly while it fades, which reads a lot smoother than a flat alpha fade.
     local WindowScale = Library:Create('UIScale', {
-        Scale = 1;
+        Scale = Library.UIScale;
         Parent = Outer;
     });
 
@@ -3673,7 +3949,7 @@ function Library:CreateWindow(...)
 
             while ScreenGui.Parent do
                 local Delta = RenderStepped:Wait();
-                local Step = Delta / math.max(Config.MenuFadeTime, 0.01);
+                local Step = Delta / math.max(Library.MenuFadeTime or Config.MenuFadeTime, 0.01);
 
                 Alpha = math.clamp(Alpha + (Toggled and Step or -Step), 0, 1);
 
@@ -3710,6 +3986,10 @@ function Library:CreateWindow(...)
     -- Toggles the menu with an eased fade + scale. Pass true/false to force a state.
     -- Calling it again mid-animation reverses direction from wherever the fade currently is.
     function Library:Toggle(State)
+        if Library:NeedsUIThread() then
+            return Library:RunOnUIThread(Library.Toggle, Library, State);
+        end;
+
         if State == nil then
             State = not Toggled;
         end;
@@ -3720,7 +4000,7 @@ function Library:CreateWindow(...)
         ToggleGeneration = ToggleGeneration + 1;
         local Generation = ToggleGeneration;
 
-        local FadeTime = Config.MenuFadeTime;
+        local FadeTime = Library.MenuFadeTime or Config.MenuFadeTime;
         local Info = TweenInfo.new(
             FadeTime,
             Enum.EasingStyle.Quad,
@@ -3749,7 +4029,7 @@ function Library:CreateWindow(...)
             Outer.Visible = true;
 
             if FromHidden then
-                WindowScale.Scale = 0.95;
+                WindowScale.Scale = 0.95 * Library.UIScale;
             end;
 
             RunCursor();
@@ -3761,7 +4041,7 @@ function Library:CreateWindow(...)
             end;
         end;
 
-        Play(WindowScale, { Scale = Toggled and 1 or 0.95 });
+        Play(WindowScale, { Scale = (Toggled and 1 or 0.95) * Library.UIScale });
 
         local Targets = Outer:GetDescendants();
         table.insert(Targets, Outer);
