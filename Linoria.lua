@@ -196,6 +196,16 @@ function Library:GetGradientFraction(Instance)
         return 0;
     end;
 
+    -- UIStroke / UICorner / UIGradient have no screen position of their own; use the element they decorate.
+    -- (An unguarded stroke here used to error and abort the whole per-frame recolor, freezing the gradient.)
+    if not Instance:IsA('GuiObject') then
+        Instance = Instance.Parent;
+
+        if not (Instance and Instance:IsA('GuiObject')) then
+            return 0;
+        end;
+    end;
+
     local Pos, Size = Holder.AbsolutePosition, Holder.AbsoluteSize;
     local FX = math.clamp((Instance.AbsolutePosition.X - Pos.X) / math.max(Size.X, 1), 0, 1);
     local FY = math.clamp((Instance.AbsolutePosition.Y - Pos.Y) / math.max(Size.Y, 1), 0, 1);
@@ -221,14 +231,18 @@ function Library:UpdateAccentColors(List)
                 local Color = Library.AccentColor;
 
                 if Gradient then
-                    Color = Library:GetAccentAt(Library:GetGradientFraction(Object.Instance));
+                    local Ok, Fraction = pcall(Library.GetGradientFraction, Library, Object.Instance);
+                    Color = Library:GetAccentAt(Ok and Fraction or 0);
                 end
 
                 if ColorIdx == 'AccentColorDark' then
                     Color = Library:GetDarkerColor(Color);
                 end
 
-                Object.Instance[Property] = Color;
+                -- one bad entry must not stop the rest of the window from recoloring
+                pcall(function()
+                    Object.Instance[Property] = Color;
+                end);
             end
         end
     end
@@ -439,7 +453,8 @@ function Library:MakeDraggable(Instance, Cutoff)
 end;
 
 function Library:AddToolTip(InfoStr, HoverInstance)
-    local X, Y = Library:GetTextBounds(InfoStr, Library.Font, 14);
+    -- Long tooltips wrap at 300 px instead of running off the edge of the screen.
+    local X, Y = Library:GetTextBounds(InfoStr, Library.Font, 14, Vector2.new(300, math.huge));
     local Tooltip = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor,
         BorderColor3 = Library.OutlineColor,
@@ -457,6 +472,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
         TextSize = 14;
         Text = InfoStr,
         TextColor3 = Library.FontColor,
+        TextWrapped = true;
         TextXAlignment = Enum.TextXAlignment.Left;
         ZIndex = Tooltip.ZIndex + 1,
 
@@ -474,6 +490,26 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
     local IsHovering = false
 
+    -- Right of and below the cursor by default; flipped to the other side of the cursor when that would run
+    -- past the screen edge, then clamped so it is always fully on screen.
+    local function PlaceTooltip()
+        local Screen = Library.ScreenGui.AbsoluteSize;
+        local Width, Height = Tooltip.AbsoluteSize.X, Tooltip.AbsoluteSize.Y;
+        local PosX, PosY = Mouse.X + 15, Mouse.Y + 12;
+
+        if PosX + Width > Screen.X - 4 then
+            PosX = Mouse.X - 10 - Width;
+        end;
+
+        if PosY + Height > Screen.Y - 4 then
+            PosY = Mouse.Y - 6 - Height;
+        end;
+
+        PosX = math.clamp(PosX, 4, math.max(4, Screen.X - Width - 4));
+        PosY = math.clamp(PosY, 4, math.max(4, Screen.Y - Height - 4));
+        Tooltip.Position = UDim2.fromOffset(PosX, PosY);
+    end;
+
     HoverInstance.MouseEnter:Connect(function()
         if Library:MouseIsOverOpenedFrame() then
             return
@@ -481,12 +517,12 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 
         IsHovering = true
 
-        Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
+        PlaceTooltip()
         Tooltip.Visible = true
 
         while IsHovering do
             RunService.Heartbeat:Wait()
-            Tooltip.Position = UDim2.fromOffset(Mouse.X + 15, Mouse.Y + 12)
+            PlaceTooltip()
         end
     end)
 
@@ -2136,41 +2172,66 @@ do
         local Groupbox = self;
         local Container = Groupbox.Container;
 
+        -- Rounded checkbox: an outlined box whose accent fill grows from the centre when the toggle is on. The
+        -- label dims while off, so the active options stand out at a glance.
         local ToggleOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundColor3 = Library.MainColor;
+            BorderSizePixel = 0;
             Size = UDim2.new(0, 13, 0, 13);
             ZIndex = 5;
             Parent = Container;
         });
 
         Library:AddToRegistry(ToggleOuter, {
-            BorderColor3 = 'Black';
+            BackgroundColor3 = 'MainColor';
+        });
+
+        Library:Create('UICorner', {
+            CornerRadius = UDim.new(0, 3);
+            Parent = ToggleOuter;
+        });
+
+        local ToggleStroke = Library:Create('UIStroke', {
+            Color = Library.OutlineColor;
+            Thickness = 1;
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+            Parent = ToggleOuter;
+        });
+
+        Library:AddToRegistry(ToggleStroke, {
+            Color = 'OutlineColor';
         });
 
         local ToggleInner = Library:Create('Frame', {
-            BackgroundColor3 = Library.MainColor;
-            BorderColor3 = Library.OutlineColor;
-            BorderMode = Enum.BorderMode.Inset;
-            Size = UDim2.new(1, 0, 1, 0);
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            Position = UDim2.fromScale(0.5, 0.5);
+            BackgroundColor3 = Library.AccentColor;
+            BorderSizePixel = 0;
+            Size = UDim2.fromScale(0, 0);
             ZIndex = 6;
             Parent = ToggleOuter;
         });
 
         Library:AddToRegistry(ToggleInner, {
-            BackgroundColor3 = 'MainColor';
-            BorderColor3 = 'OutlineColor';
+            BackgroundColor3 = 'AccentColor';
+        });
+
+        Library:Create('UICorner', {
+            CornerRadius = UDim.new(0, 2);
+            Parent = ToggleInner;
         });
 
         local ToggleLabel = Library:CreateLabel({
             Size = UDim2.new(0, 216, 1, 0);
-            Position = UDim2.new(1, 6, 0, 0);
+            Position = UDim2.new(1, 7, 0, 0);
             TextSize = 14;
             Text = Info.Text;
             TextXAlignment = Enum.TextXAlignment.Left;
             ZIndex = 6;
-            Parent = ToggleInner;
+            Parent = ToggleOuter;
         });
+
+        local ToggleLabelStroke = ToggleLabel:FindFirstChildOfClass('UIStroke');
 
         Library:Create('UIListLayout', {
             Padding = UDim.new(0, 4);
@@ -2187,25 +2248,58 @@ do
             Parent = ToggleOuter;
         });
 
-        Library:OnHighlight(ToggleRegion, ToggleOuter,
-            { BorderColor3 = 'AccentColor' },
-            { BorderColor3 = 'Black' }
-        );
+        local Hovering = false;
+        local FadeInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+
+        -- Outline follows the accent while the toggle is on or hovered.
+        local function UpdateStroke()
+            local Accent = Toggle.Value or Hovering;
+            ToggleStroke.Color = Accent and Library.AccentColor or Library.OutlineColor;
+
+            local Reg = Library.RegistryMap[ToggleStroke];
+            if Reg then
+                Reg.Properties.Color = Accent and 'AccentColor' or 'OutlineColor';
+            end;
+        end;
+
+        ToggleRegion.MouseEnter:Connect(function()
+            Hovering = true;
+            UpdateStroke();
+        end);
+
+        ToggleRegion.MouseLeave:Connect(function()
+            Hovering = false;
+            UpdateStroke();
+        end);
 
         function Toggle:UpdateColors()
-            Toggle:Display();
+            Toggle:Display(true);
         end;
 
         if type(Info.Tooltip) == 'string' then
             Library:AddToolTip(Info.Tooltip, ToggleRegion)
         end
 
-        function Toggle:Display()
-            ToggleInner.BackgroundColor3 = Toggle.Value and Library.AccentColor or Library.MainColor;
-            ToggleInner.BorderColor3 = Toggle.Value and Library.AccentColorDark or Library.OutlineColor;
+        function Toggle:Display(Instant)
+            local On = Toggle.Value;
+            local FillSize = On and UDim2.new(1, -4, 1, -4) or UDim2.fromScale(0, 0);
+            local LabelFade = On and 0 or 0.35;
 
-            Library.RegistryMap[ToggleInner].Properties.BackgroundColor3 = Toggle.Value and 'AccentColor' or 'MainColor';
-            Library.RegistryMap[ToggleInner].Properties.BorderColor3 = Toggle.Value and 'AccentColorDark' or 'OutlineColor';
+            UpdateStroke();
+
+            if Instant then
+                ToggleInner.Size = FillSize;
+                ToggleLabel.TextTransparency = LabelFade;
+                if ToggleLabelStroke then
+                    ToggleLabelStroke.Transparency = LabelFade;
+                end;
+            else
+                TweenService:Create(ToggleInner, FadeInfo, { Size = FillSize }):Play();
+                TweenService:Create(ToggleLabel, FadeInfo, { TextTransparency = LabelFade }):Play();
+                if ToggleLabelStroke then
+                    TweenService:Create(ToggleLabelStroke, FadeInfo, { Transparency = LabelFade }):Play();
+                end;
+            end;
         end;
 
         function Toggle:OnChanged(Func)
@@ -2248,7 +2342,7 @@ do
             Library:AddToRegistry(ToggleLabel, { TextColor3 = 'RiskColor' })
         end
 
-        Toggle:Display();
+        Toggle:Display(true);
         Groupbox:AddBlank(Info.BlankSize or 5 + 2);
         Groupbox:Resize();
 
@@ -3460,9 +3554,11 @@ function Library:CreateWindow(...)
 
         local TabButtonWidth = Library:GetTextBounds(Name, Library.Font, 16);
 
+        -- Underline tab: the name (dimmed while inactive) over an accent bar that opens on the active tab.
         local TabButton = Library:Create('Frame', {
             BackgroundColor3 = Library.BackgroundColor;
-            BorderColor3 = Library.OutlineColor;
+            BackgroundTransparency = 1;
+            BorderSizePixel = 0;
             Size = UDim2.new(0, TabButtonWidth + 8 + 4, 1, 0);
             ZIndex = 1;
             Parent = TabArea;
@@ -3470,16 +3566,57 @@ function Library:CreateWindow(...)
 
         Library:AddToRegistry(TabButton, {
             BackgroundColor3 = 'BackgroundColor';
-            BorderColor3 = 'OutlineColor';
         });
 
         local TabButtonLabel = Library:CreateLabel({
             Position = UDim2.new(0, 0, 0, 0);
-            Size = UDim2.new(1, 0, 1, -1);
+            Size = UDim2.new(1, 0, 1, -3);
             Text = Name;
+            TextTransparency = 0.45;
             ZIndex = 1;
             Parent = TabButton;
         });
+
+        local TabLabelStroke = TabButtonLabel:FindFirstChildOfClass('UIStroke');
+        if TabLabelStroke then
+            TabLabelStroke.Transparency = 0.45;
+        end;
+
+        local TabUnderline = Library:Create('Frame', {
+            AnchorPoint = Vector2.new(0.5, 1);
+            Position = UDim2.new(0.5, 0, 1, 0);
+            BackgroundColor3 = Library.AccentColor;
+            BorderSizePixel = 0;
+            Size = UDim2.new(0, 0, 0, 2);
+            ZIndex = 2;
+            Parent = TabButton;
+        });
+
+        Library:AddToRegistry(TabUnderline, {
+            BackgroundColor3 = 'AccentColor';
+        });
+
+        local TabTweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+        local TabActive = false;
+
+        local function FadeTabLabel(Transparency)
+            TweenService:Create(TabButtonLabel, TabTweenInfo, { TextTransparency = Transparency }):Play();
+            if TabLabelStroke then
+                TweenService:Create(TabLabelStroke, TabTweenInfo, { Transparency = Transparency }):Play();
+            end;
+        end;
+
+        TabButton.MouseEnter:Connect(function()
+            if not TabActive then
+                FadeTabLabel(0.2);
+            end;
+        end);
+
+        TabButton.MouseLeave:Connect(function()
+            if not TabActive then
+                FadeTabLabel(0.45);
+            end;
+        end);
 
         local Blocker = Library:Create('Frame', {
             BackgroundColor3 = Library.MainColor;
@@ -3558,16 +3695,16 @@ function Library:CreateWindow(...)
                 Tab:HideTab();
             end;
 
-            Blocker.BackgroundTransparency = 0;
-            TabButton.BackgroundColor3 = Library.MainColor;
-            Library.RegistryMap[TabButton].Properties.BackgroundColor3 = 'MainColor';
+            TabActive = true;
+            FadeTabLabel(0);
+            TweenService:Create(TabUnderline, TabTweenInfo, { Size = UDim2.new(1, -6, 0, 2) }):Play();
             TabFrame.Visible = true;
         end;
 
         function Tab:HideTab()
-            Blocker.BackgroundTransparency = 1;
-            TabButton.BackgroundColor3 = Library.BackgroundColor;
-            Library.RegistryMap[TabButton].Properties.BackgroundColor3 = 'BackgroundColor';
+            TabActive = false;
+            FadeTabLabel(0.45);
+            TweenService:Create(TabUnderline, TabTweenInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
             TabFrame.Visible = false;
         end;
 
@@ -3719,10 +3856,16 @@ function Library:CreateWindow(...)
                 BackgroundColor3 = 'AccentColor';
             });
 
+            -- Header geometry: 2 px accent line, tab strip, 1 px divider, then the content.
+            local TabStripTop = 3;
+            local TabStripHeight = 20;
+            local DividerY = TabStripTop + TabStripHeight;
+            local ContentTop = DividerY + 4;
+
             local TabboxButtons = Library:Create('Frame', {
                 BackgroundTransparency = 1;
-                Position = UDim2.new(0, 0, 0, 1);
-                Size = UDim2.new(1, 0, 0, 18);
+                Position = UDim2.new(0, 0, 0, TabStripTop);
+                Size = UDim2.new(1, 0, 0, TabStripHeight);
                 ZIndex = 5;
                 Parent = BoxInner;
             });
@@ -3734,48 +3877,91 @@ function Library:CreateWindow(...)
                 Parent = TabboxButtons;
             });
 
+            -- Thin divider under the tab strip; the active tab's accent underline sits on top of it.
+            local TabboxDivider = Library:Create('Frame', {
+                BackgroundColor3 = Library.OutlineColor;
+                BorderSizePixel = 0;
+                Position = UDim2.new(0, 4, 0, DividerY);
+                Size = UDim2.new(1, -8, 0, 1);
+                ZIndex = 5;
+                Parent = BoxInner;
+            });
+
+            Library:AddToRegistry(TabboxDivider, {
+                BackgroundColor3 = 'OutlineColor';
+            });
+
             function Tabbox:AddTab(Name)
                 local Tab = {};
+                local TabInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+                local Active = false;
 
+                -- Underline tabs: no boxes, just the name (dimmed while inactive) and an accent bar under the
+                -- active one that slides open to the width of its text.
                 local Button = Library:Create('Frame', {
-                    BackgroundColor3 = Library.MainColor;
-                    BorderColor3 = Color3.new(0, 0, 0);
+                    BackgroundTransparency = 1;
+                    BorderSizePixel = 0;
                     Size = UDim2.new(0.5, 0, 1, 0);
                     ZIndex = 6;
                     Parent = TabboxButtons;
                 });
 
-                Library:AddToRegistry(Button, {
-                    BackgroundColor3 = 'MainColor';
-                });
-
                 local ButtonLabel = Library:CreateLabel({
-                    Size = UDim2.new(1, 0, 1, 0);
+                    Size = UDim2.new(1, 0, 1, -2);
                     TextSize = 14;
                     Text = Name;
+                    TextTransparency = 0.45;
+                    TextTruncate = Enum.TextTruncate.AtEnd;
                     TextXAlignment = Enum.TextXAlignment.Center;
                     ZIndex = 7;
                     Parent = Button;
                 });
 
-                local Block = Library:Create('Frame', {
-                    BackgroundColor3 = Library.BackgroundColor;
+                local ButtonLabelStroke = ButtonLabel:FindFirstChildOfClass('UIStroke');
+                if ButtonLabelStroke then
+                    ButtonLabelStroke.Transparency = 0.45;
+                end;
+
+                local UnderlineWidth = Library:GetTextBounds(Name, Library.Font, 14) + 10;
+
+                -- sits on the divider line, directly under the tab name
+                local Underline = Library:Create('Frame', {
+                    AnchorPoint = Vector2.new(0.5, 1);
+                    Position = UDim2.new(0.5, 0, 1, 0);
+                    BackgroundColor3 = Library.AccentColor;
                     BorderSizePixel = 0;
-                    Position = UDim2.new(0, 0, 1, 0);
-                    Size = UDim2.new(1, 0, 0, 1);
-                    Visible = false;
-                    ZIndex = 9;
+                    Size = UDim2.new(0, 0, 0, 2);
+                    ZIndex = 8;
                     Parent = Button;
                 });
 
-                Library:AddToRegistry(Block, {
-                    BackgroundColor3 = 'BackgroundColor';
+                Library:AddToRegistry(Underline, {
+                    BackgroundColor3 = 'AccentColor';
                 });
+
+                local function FadeLabel(Transparency)
+                    TweenService:Create(ButtonLabel, TabInfo, { TextTransparency = Transparency }):Play();
+                    if ButtonLabelStroke then
+                        TweenService:Create(ButtonLabelStroke, TabInfo, { Transparency = Transparency }):Play();
+                    end;
+                end;
+
+                Button.MouseEnter:Connect(function()
+                    if not Active then
+                        FadeLabel(0.2);
+                    end;
+                end);
+
+                Button.MouseLeave:Connect(function()
+                    if not Active then
+                        FadeLabel(0.45);
+                    end;
+                end);
 
                 local Container = Library:Create('Frame', {
                     BackgroundTransparency = 1;
-                    Position = UDim2.new(0, 4, 0, 20);
-                    Size = UDim2.new(1, -4, 1, -20);
+                    Position = UDim2.new(0, 4, 0, ContentTop);
+                    Size = UDim2.new(1, -4, 1, -ContentTop);
                     ZIndex = 1;
                     Visible = false;
                     Parent = BoxInner;
@@ -3792,21 +3978,20 @@ function Library:CreateWindow(...)
                         Tab:Hide();
                     end;
 
+                    Active = true;
                     Container.Visible = true;
-                    Block.Visible = true;
-
-                    Button.BackgroundColor3 = Library.BackgroundColor;
-                    Library.RegistryMap[Button].Properties.BackgroundColor3 = 'BackgroundColor';
+                    FadeLabel(0);
+                    local Width = math.min(UnderlineWidth, math.max(Button.AbsoluteSize.X - 6, 0));
+                    TweenService:Create(Underline, TabInfo, { Size = UDim2.new(0, Width > 0 and Width or UnderlineWidth, 0, 2) }):Play();
 
                     Tab:Resize();
                 end;
 
                 function Tab:Hide()
+                    Active = false;
                     Container.Visible = false;
-                    Block.Visible = false;
-
-                    Button.BackgroundColor3 = Library.MainColor;
-                    Library.RegistryMap[Button].Properties.BackgroundColor3 = 'MainColor';
+                    FadeLabel(0.45);
+                    TweenService:Create(Underline, TabInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
                 end;
 
                 function Tab:Resize()
@@ -3834,7 +4019,7 @@ function Library:CreateWindow(...)
                         end;
                     end;
 
-                    BoxOuter.Size = UDim2.new(1, 0, 0, 20 + Size + 2 + 2);
+                    BoxOuter.Size = UDim2.new(1, 0, 0, ContentTop + Size + 2 + 2);
                 end;
 
                 Button.InputBegan:Connect(function(Input)
