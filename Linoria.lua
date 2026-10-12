@@ -1,3 +1,32 @@
+--[[
+    Linoria UI library (KeneiUmaru fork of violin-suzutsuki/LinoriaLib)
+
+    Usage:
+        local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/KeneiUmaru/Library/main/Linoria.lua'))()
+        local ThemeManager, SaveManager = Library.ThemeManager, Library.SaveManager
+        local Window = Library:CreateWindow({ Title = 'My hub', Center = true, AutoShow = true })
+
+    Loading this file only builds the library; it creates no window. See bloxspin/kenya_client.lua for a full example.
+
+    Additions over upstream:
+        Library:Toggle(state?)                    -- eased fade + scale open/close, interruptible; pass true/false to force
+        Library:SetRainbowAccent(on, gradient?)   -- hue-cycling accent, optionally spread down the window
+        Library:SetKeybindFrameVisibility(on)     -- keybind HUD, auto-hidden while it has no entries
+        Library:SetScale(n)                       -- scale the window and its popups (0.5 - 2)
+        Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
+                                                  -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
+        Library.Version                           -- API version number, see bloxspin/kenya_client.lua for the check
+        Library.RainbowSpeed / Library.GradientSpread / Library.MenuFadeTime -- live-tunable numbers
+        Library.GradientMode ('Rainbow'|'Custom'), GradientDirection ('Vertical'|'Horizontal'|'Diagonal'),
+        GradientReverse, GradientColorA/B, RainbowSaturation, RainbowValue -- accent gradient options;
+        call Library:RefreshAccent() after changing them while nothing is animating
+        Library.NotifyOnError = true              -- turn callback errors into notifications instead of console errors
+        Library.ThemeManager / Library.SaveManager are bundled (no extra HttpGet needed)
+        ThemeManager:BuildMenuSection(tab)        -- Kenya Client Menu + Accent groupboxes (sets the menu keybind); call before ApplyToTab
+        Sliders and tab areas size from the real window, so custom CreateWindow sizes work
+        Every connection is tracked so Library:Unload() leaves nothing running
+]]
+
 local InputService = game:GetService('UserInputService');
 local TextService = game:GetService('TextService');
 local CoreGui = game:GetService('CoreGui');
@@ -81,6 +110,11 @@ local Library = {
     GradientColorB = Color3.fromRGB(170, 0, 255);
     RainbowSaturation = 0.8;
     RainbowValue = 1;
+
+    -- Window glow (see Library:SetGlow)
+    GlowEnabled = false;
+    GlowSize = 30;
+    GlowTransparency = 0.5;
 };
 
 local RainbowStep = 0
@@ -670,6 +704,20 @@ function Library:RegisterPopup(Frame)
     });
 
     table.insert(Library.Popups, Frame);
+end;
+
+-- Accent glow around the main window. Size is the spread in px, Transparency 0..1 (lower = stronger).
+function Library:SetGlow(Enabled, Size, Transparency)
+    Library.GlowEnabled = (not not Enabled);
+    Library.GlowSize = tonumber(Size) or Library.GlowSize;
+    Library.GlowTransparency = tonumber(Transparency) or Library.GlowTransparency;
+
+    local Glow = Library.WindowGlow;
+
+    if Glow then
+        Glow.Size = UDim2.new(1, 2 * Library.GlowSize, 1, 2 * Library.GlowSize);
+        Glow.ImageTransparency = Library.GlowEnabled and Library.GlowTransparency or 1;
+    end;
 end;
 
 -- Scales the main window and every popup. 1 = default size.
@@ -3410,6 +3458,29 @@ function Library:CreateWindow(...)
 
     Library:MakeDraggable(Outer, 25);
 
+    -- Soft accent-colored glow behind the window; see Library:SetGlow. ZIndex 0 puts it under Outer
+    -- (the ScreenGui uses Global ZIndex), and being a child it scales and drags with the window.
+    local Glow = Library:Create('ImageLabel', {
+        Name = 'Glow';
+        AnchorPoint = Vector2.new(0.5, 0.5);
+        BackgroundTransparency = 1;
+        Position = UDim2.fromScale(0.5, 0.5);
+        Size = UDim2.new(1, 2 * Library.GlowSize, 1, 2 * Library.GlowSize);
+        Image = 'rbxassetid://5028857472';
+        ImageColor3 = Library.AccentColor;
+        ImageTransparency = Library.GlowEnabled and Library.GlowTransparency or 1;
+        ScaleType = Enum.ScaleType.Slice;
+        SliceCenter = Rect.new(24, 24, 276, 276);
+        ZIndex = 0;
+        Parent = Outer;
+    });
+
+    Library:AddToRegistry(Glow, {
+        ImageColor3 = 'AccentColor';
+    });
+
+    Library.WindowGlow = Library.WindowGlow or Glow;
+
     local Inner = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
         BorderSizePixel = 0;
@@ -4558,6 +4629,17 @@ local ThemeManager = {} do
 		MenuGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
+		MenuGroup:AddToggle('WindowGlow', { Text = 'Window glow', Default = false, Tooltip = 'Soft accent-colored glow around the menu' })
+		local GlowBox = MenuGroup:AddDependencyBox()
+		GlowBox:AddSlider('GlowSize', { Text = 'Glow size', Default = 30, Min = 5, Max = 100, Rounding = 0, Suffix = 'px', HideMax = true })
+		GlowBox:AddSlider('GlowStrength', { Text = 'Glow strength', Default = 50, Min = 5, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
+		GlowBox:SetupDependencies({ { Toggles.WindowGlow, true } })
+		local function ApplyGlow()
+		    Library:SetGlow(Toggles.WindowGlow.Value, Options.GlowSize.Value, 1 - Options.GlowStrength.Value / 100)
+		end
+		Toggles.WindowGlow:OnChanged(ApplyGlow)
+		Options.GlowSize:OnChanged(ApplyGlow)
+		Options.GlowStrength:OnChanged(ApplyGlow)
 		MenuGroup:AddButton('Unload', function() Library:Unload() end)
 
 		local AccentGroup = tab:AddRightGroupbox('Accent')
