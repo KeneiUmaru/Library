@@ -13,6 +13,9 @@
         Library:SetRainbowAccent(on, gradient?)   -- hue-cycling accent, optionally spread down the window
         Library:SetKeybindFrameVisibility(on)     -- keybind HUD, auto-hidden while it has no entries
         Library:SetScale(n)                       -- scale the window and its popups (0.5 - 2)
+        Library:SetGlow(on, size, transparency)   -- accent glow around the window
+        Library:SetElementGlow(on, transparency)  -- glow under toggles, slider fills and color swatches
+        Library:AddGlow(parent, size, zindex, colorKey) -- add your own glow to any frame
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Library.Version                           -- API version number, see bloxspin/kenya_client.lua for the check
@@ -95,7 +98,7 @@ local Library = {
     Signals = {};
     ScreenGui = ScreenGui;
 
-    Version = 4;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 5;          -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -111,10 +114,13 @@ local Library = {
     RainbowSaturation = 0.8;
     RainbowValue = 1;
 
-    -- Window glow (see Library:SetGlow)
+    -- Window glow (see Library:SetGlow) and per-element glow (toggles, slider fills, color swatches)
     GlowEnabled = false;
     GlowSize = 30;
     GlowTransparency = 0.5;
+    ElementGlow = false;
+    ElementGlowTransparency = 0.55;
+    ElementGlows = {};
 };
 
 local RainbowStep = 0
@@ -706,6 +712,63 @@ function Library:RegisterPopup(Frame)
     table.insert(Library.Popups, Frame);
 end;
 
+-- Glow image: a blurred rounded square (the glow asset used by Starlight Interface Suite). Its 100px blurred
+-- margin is stretched to G px, so a glow of size G spills exactly G px past the frame it is parented to.
+-- ColorKey (e.g. 'AccentColor') keeps it following the library colors; leave nil to color it yourself.
+function Library:AddGlow(Parent, G, ZIndex, ColorKey)
+    local Glow = Library:Create('ImageLabel', {
+        Name = 'Glow';
+        AnchorPoint = Vector2.new(0.5, 0.5);
+        BackgroundTransparency = 1;
+        Position = UDim2.fromScale(0.5, 0.5);
+        Size = UDim2.new(1, 2 * G, 1, 2 * G);
+        Image = 'rbxassetid://94680501858633';
+        ImageColor3 = Library.AccentColor;
+        ImageTransparency = 1;
+        ScaleType = Enum.ScaleType.Slice;
+        SliceCenter = Rect.new(100, 100, 500, 500);
+        SliceScale = G / 100;
+        ZIndex = ZIndex;
+        Parent = Parent;
+    });
+
+    if ColorKey then
+        Library:AddToRegistry(Glow, { ImageColor3 = ColorKey });
+    end;
+
+    return Glow;
+end;
+
+-- Element glows are hidden unless Library.ElementGlow is on; IsActive() says whether this one should
+-- currently be lit (toggle on, slider above zero, ...). Call Library:ApplyElementGlow after its state changes.
+function Library:TrackElementGlow(Glow, IsActive)
+    Library.ElementGlows[Glow] = IsActive;
+end;
+
+function Library:ApplyElementGlow(Glow, Instant)
+    local IsActive = Library.ElementGlows[Glow];
+    local Target = (Library.ElementGlow and IsActive and IsActive()) and Library.ElementGlowTransparency or 1;
+
+    if Instant then
+        Glow.ImageTransparency = Target;
+    else
+        TweenService:Create(Glow, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { ImageTransparency = Target }):Play();
+    end;
+end;
+
+function Library:SetElementGlow(Enabled, Transparency)
+    Library.ElementGlow = (not not Enabled);
+    Library.ElementGlowTransparency = tonumber(Transparency) or Library.ElementGlowTransparency;
+
+    for Glow in next, Library.ElementGlows do
+        if Glow.Parent then
+            Library:ApplyElementGlow(Glow);
+        else
+            Library.ElementGlows[Glow] = nil;
+        end;
+    end;
+end;
+
 -- Accent glow around the main window. Size is the spread in px, Transparency 0..1 (lower = stronger).
 function Library:SetGlow(Enabled, Size, Transparency)
     Library.GlowEnabled = (not not Enabled);
@@ -716,6 +779,7 @@ function Library:SetGlow(Enabled, Size, Transparency)
 
     if Glow then
         Glow.Size = UDim2.new(1, 2 * Library.GlowSize, 1, 2 * Library.GlowSize);
+        Glow.SliceScale = Library.GlowSize / 100;
         Glow.ImageTransparency = Library.GlowEnabled and Library.GlowTransparency or 1;
     end;
 end;
@@ -778,6 +842,10 @@ do
             ZIndex = 6;
             Parent = ToggleLabel;
         });
+
+        -- Swatch glow takes the picked color (not the accent) and is lit whenever element glow is on.
+        local SwatchGlow = Library:AddGlow(DisplayFrame, 8, 5);
+        Library:TrackElementGlow(SwatchGlow, function() return true; end);
 
         -- Transparency image taken from https://github.com/matas3535/SplixPrivateDrawingLibrary/blob/main/Library.lua cus i'm lazy
         local CheckerFrame = Library:Create('ImageLabel', {
@@ -1186,6 +1254,9 @@ do
                 BackgroundTransparency = ColorPicker.Transparency;
                 BorderColor3 = Library:GetDarkerColor(ColorPicker.Value);
             });
+
+            SwatchGlow.ImageColor3 = ColorPicker.Value;
+            Library:ApplyElementGlow(SwatchGlow, true);
 
             if TransparencyBoxInner then
                 TransparencyBoxInner.BackgroundColor3 = ColorPicker.Value;
@@ -2241,6 +2312,9 @@ do
             Parent = ToggleInner;
         });
 
+        local ToggleGlow = Library:AddGlow(ToggleOuter, 7, 4, 'AccentColor');
+        Library:TrackElementGlow(ToggleGlow, function() return Toggle.Value; end);
+
         local ToggleLabel = Library:CreateLabel({
             Size = UDim2.new(0, 216, 1, 0);
             Position = UDim2.new(1, 7, 0, 0);
@@ -2306,6 +2380,7 @@ do
             local LabelFade = On and 0 or 0.35;
 
             UpdateStroke();
+            Library:ApplyElementGlow(ToggleGlow, Instant);
 
             if Instant then
                 ToggleInner.Size = FillSize;
@@ -2450,6 +2525,9 @@ do
             BorderColor3 = 'AccentColorDark';
         });
 
+        local FillGlow = Library:AddGlow(Fill, 6, 6, 'AccentColor');
+        Library:TrackElementGlow(FillGlow, function() return Fill.Size.X.Offset > 0; end);
+
         local HideBorderRight = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
             BorderSizePixel = 0;
@@ -2498,6 +2576,7 @@ do
 
             local X = math.ceil(Library:MapValue(Slider.Value, Slider.Min, Slider.Max, 0, Slider.MaxSize));
             Fill.Size = UDim2.new(0, X, 1, 0);
+            Library:ApplyElementGlow(FillGlow, true);
 
             HideBorderRight.Visible = not (X == Slider.MaxSize or X == 0);
         end;
@@ -3199,6 +3278,7 @@ do
     local WatermarkLabel = Library:CreateLabel({
         Position = UDim2.new(0, 5, 0, 0);
         Size = UDim2.new(1, -4, 1, 0);
+        Text = '';
         TextSize = 14;
         TextXAlignment = Enum.TextXAlignment.Left;
         ZIndex = 203;
@@ -3281,9 +3361,10 @@ do
     Library:MakeDraggable(KeybindOuter);
 end;
 
+-- The bar only shows once SetWatermark has given it text, so a script that never sets one gets no empty box.
 function Library:SetWatermarkVisibility(Bool)
     Library.WatermarkEnabled = (not not Bool);
-    Library.Watermark.Visible = Library.WatermarkEnabled;
+    Library.Watermark.Visible = Library.WatermarkEnabled and Library.WatermarkText.Text ~= '';
 end;
 
 -- Resizes the keybind list HUD to fit its entries. The frame only shows while it is enabled AND at
@@ -3315,12 +3396,13 @@ function Library:SetWatermark(Text)
 
     local X, Y = Library:GetTextBounds(Text, Library.Font, 14);
     Library.Watermark.Size = UDim2.new(0, X + 15, 0, (Y * 1.5) + 3);
+    Library.WatermarkText.Text = Text;
 
     if Library.WatermarkEnabled == nil then
         Library:SetWatermarkVisibility(true);
+    else
+        Library.Watermark.Visible = Library.WatermarkEnabled and Text ~= '';
     end;
-
-    Library.WatermarkText.Text = Text;
 end;
 
 function Library:Notify(Text, Time)
@@ -3460,25 +3542,8 @@ function Library:CreateWindow(...)
 
     -- Soft accent-colored glow behind the window; see Library:SetGlow. ZIndex 0 puts it under Outer
     -- (the ScreenGui uses Global ZIndex), and being a child it scales and drags with the window.
-    local Glow = Library:Create('ImageLabel', {
-        Name = 'Glow';
-        AnchorPoint = Vector2.new(0.5, 0.5);
-        BackgroundTransparency = 1;
-        Position = UDim2.fromScale(0.5, 0.5);
-        Size = UDim2.new(1, 2 * Library.GlowSize, 1, 2 * Library.GlowSize);
-        Image = 'rbxassetid://5028857472';
-        ImageColor3 = Library.AccentColor;
-        ImageTransparency = Library.GlowEnabled and Library.GlowTransparency or 1;
-        ScaleType = Enum.ScaleType.Slice;
-        SliceCenter = Rect.new(24, 24, 276, 276);
-        ZIndex = 0;
-        Parent = Outer;
-    });
-
-    Library:AddToRegistry(Glow, {
-        ImageColor3 = 'AccentColor';
-    });
-
+    local Glow = Library:AddGlow(Outer, Library.GlowSize, 0, 'AccentColor');
+    Glow.ImageTransparency = Library.GlowEnabled and Library.GlowTransparency or 1;
     Library.WindowGlow = Library.WindowGlow or Glow;
 
     local Inner = Library:Create('Frame', {
@@ -4634,6 +4699,15 @@ local ThemeManager = {} do
 		GlowBox:AddSlider('GlowSize', { Text = 'Glow size', Default = 30, Min = 5, Max = 100, Rounding = 0, Suffix = 'px', HideMax = true })
 		GlowBox:AddSlider('GlowStrength', { Text = 'Glow strength', Default = 50, Min = 5, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
 		GlowBox:SetupDependencies({ { Toggles.WindowGlow, true } })
+		MenuGroup:AddToggle('ElementGlow', { Text = 'Element glow', Default = false, Tooltip = 'Glow under switched-on toggles, slider fills and color swatches' })
+		local ElementGlowBox = MenuGroup:AddDependencyBox()
+		ElementGlowBox:AddSlider('ElementGlowStrength', { Text = 'Element glow strength', Default = 45, Min = 5, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
+		ElementGlowBox:SetupDependencies({ { Toggles.ElementGlow, true } })
+		local function ApplyElementGlow()
+		    Library:SetElementGlow(Toggles.ElementGlow.Value, 1 - Options.ElementGlowStrength.Value / 100)
+		end
+		Toggles.ElementGlow:OnChanged(ApplyElementGlow)
+		Options.ElementGlowStrength:OnChanged(ApplyElementGlow)
 		local function ApplyGlow()
 		    Library:SetGlow(Toggles.WindowGlow.Value, Options.GlowSize.Value, 1 - Options.GlowStrength.Value / 100)
 		end
