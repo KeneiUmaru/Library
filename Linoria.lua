@@ -4401,6 +4401,18 @@ local ThemeManager = {} do
 		groupbox:AddLabel('Outline color'):AddColorPicker('OutlineColor', { Default = self.Library.OutlineColor });
 		groupbox:AddLabel('Font color')	:AddColorPicker('FontColor', { Default = self.Library.FontColor });
 
+		-- built-in accent animation; a client that made its own toggles (kenya_client) keeps them
+		if not Toggles.RainbowAccent and not Toggles.GradientAccent then
+			groupbox:AddDivider()
+			groupbox:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = true })
+			groupbox:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = true, Tooltip = 'Spread the accent across the window instead of one flat color' })
+			local function ApplyAccentMode()
+				self.Library:SetRainbowAccent(Toggles.RainbowAccent.Value, Toggles.GradientAccent.Value)
+			end
+			Toggles.RainbowAccent:OnChanged(ApplyAccentMode)
+			Toggles.GradientAccent:OnChanged(ApplyAccentMode)
+		end
+
 		local ThemesArray = {}
 		for Name, Theme in next, self.BuiltInThemes do
 			table.insert(ThemesArray, Name)
