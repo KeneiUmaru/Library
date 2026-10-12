@@ -22,6 +22,7 @@
         call Library:RefreshAccent() after changing them while nothing is animating
         Library.NotifyOnError = true              -- turn callback errors into notifications instead of console errors
         Library.ThemeManager / Library.SaveManager are bundled (no extra HttpGet needed)
+        ThemeManager:BuildMenuSection(tab)        -- Kenya Client Menu + Accent groupboxes (sets the menu keybind); call before ApplyToTab
         Sliders and tab areas size from the real window, so custom CreateWindow sizes work
         Every connection is tracked so Library:Unload() leaves nothing running
 ]]
@@ -94,7 +95,7 @@ local Library = {
     Signals = {};
     ScreenGui = ScreenGui;
 
-    Version = 3;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 4;          -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -4573,6 +4574,79 @@ local ThemeManager = {} do
 	function ThemeManager:ApplyToGroupbox(groupbox)
 		assert(self.Library, 'Must set ThemeManager.Library first!')
 		self:CreateThemeManager(groupbox)
+	end
+
+	-- Kenya Client style Settings: Menu groupbox (keybind, scale, fade, watermark / keybind HUD, unload)
+	-- and Accent groupbox (animate, gradient, direction, custom colors). Call before ApplyToTab so the
+	-- built-in accent toggles there are skipped. Returns the Menu and Accent groupboxes.
+	function ThemeManager:BuildMenuSection(tab)
+		local MenuGroup = tab:AddLeftGroupbox('Menu')
+
+		MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
+		MenuGroup:AddSlider('UIScale', { Text = 'UI scale', Default = 1, Min = 0.5, Max = 2, Rounding = 2, Suffix = 'x', HideMax = true, Tooltip = 'Size of the menu and its popups' })
+		MenuGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
+		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
+		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
+		MenuGroup:AddButton('Unload', function() Library:Unload() end)
+
+		local AccentGroup = tab:AddRightGroupbox('Accent')
+
+		AccentGroup:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = true, Tooltip = 'Rainbow: cycle the hue. Custom colors: flow them across the menu' })
+		AccentGroup:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = true, Tooltip = 'Spread the accent across the window instead of one flat color' })
+		AccentGroup:AddSlider('RainbowSpeed', { Text = 'Animation speed', Default = 1, Min = 0.1, Max = 5, Rounding = 1, Suffix = 'x', HideMax = true })
+
+		-- Gradient shape (only shown while the gradient is on)
+		local GradientBox = AccentGroup:AddDependencyBox()
+		GradientBox:AddDropdown('GradientDirection', { Text = 'Gradient direction', Values = { 'Vertical', 'Horizontal', 'Diagonal' }, Default = 1 })
+		GradientBox:AddToggle('GradientReverse', { Text = 'Reverse direction', Default = false })
+		GradientBox:SetupDependencies({ { Toggles.GradientAccent, true } })
+
+		-- Color source: rainbow hue wheel, or a blend between two colors of your choice
+		AccentGroup:AddToggle('CustomGradientColors', { Text = 'Custom colors', Default = false, Tooltip = 'Blend between two colors instead of the rainbow' })
+
+		local CustomBox = AccentGroup:AddDependencyBox()
+		CustomBox:AddLabel('Color A (start)'):AddColorPicker('GradientColorA', { Default = Color3.fromRGB(0, 170, 255), Title = 'Gradient color A' })
+		CustomBox:AddLabel('Color B (end)'):AddColorPicker('GradientColorB', { Default = Color3.fromRGB(170, 0, 255), Title = 'Gradient color B' })
+		CustomBox:AddButton('Swap colors', function()
+		    local A, B = Options.GradientColorA.Value, Options.GradientColorB.Value
+		    Options.GradientColorA:SetValueRGB(B)
+		    Options.GradientColorB:SetValueRGB(A)
+		end)
+		CustomBox:SetupDependencies({ { Toggles.CustomGradientColors, true } })
+
+		local RainbowBox = AccentGroup:AddDependencyBox()
+		RainbowBox:AddSlider('GradientSpread', { Text = 'Gradient spread', Default = 0.35, Min = 0.05, Max = 1, Rounding = 2, HideMax = true, Tooltip = 'How much of the hue wheel the gradient covers from start to end' })
+		RainbowBox:AddSlider('RainbowSaturation', { Text = 'Rainbow saturation', Default = 80, Min = 0, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
+		RainbowBox:AddSlider('RainbowBrightness', { Text = 'Rainbow brightness', Default = 100, Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
+		RainbowBox:SetupDependencies({ { Toggles.CustomGradientColors, false } })
+
+		local function ApplyAccentMode()
+		    Library:SetRainbowAccent(Toggles.RainbowAccent.Value, Toggles.GradientAccent.Value)
+		end
+
+		Toggles.RainbowAccent:OnChanged(ApplyAccentMode)
+		Toggles.GradientAccent:OnChanged(ApplyAccentMode)
+
+		Options.RainbowSpeed:OnChanged(function(Value) Library.RainbowSpeed = Value end)
+		Options.GradientSpread:OnChanged(function(Value) Library.GradientSpread = Value end)
+		Options.GradientDirection:OnChanged(function(Value) Library.GradientDirection = Value end)
+		Toggles.GradientReverse:OnChanged(function(Value) Library.GradientReverse = Value end)
+		Options.RainbowSaturation:OnChanged(function(Value) Library.RainbowSaturation = Value / 100 end)
+		Options.RainbowBrightness:OnChanged(function(Value) Library.RainbowValue = Value / 100 end)
+		Options.GradientColorA:OnChanged(function(Value) Library.GradientColorA = Value end)
+		Options.GradientColorB:OnChanged(function(Value) Library.GradientColorB = Value end)
+		Toggles.CustomGradientColors:OnChanged(function(Value)
+		    Library.GradientMode = Value and 'Custom' or 'Rainbow'
+		    Library:RefreshAccent()
+		end)
+		Options.UIScale:OnChanged(function(Value) Library:SetScale(Value) end)
+		Options.MenuFadeTime:OnChanged(function(Value) Library.MenuFadeTime = Value end)
+		Toggles.ShowWatermark:OnChanged(function(Value) Library:SetWatermarkVisibility(Value) end)
+		Toggles.ShowKeybinds:OnChanged(function(Value) Library:SetKeybindFrameVisibility(Value) end)
+
+		Library.ToggleKeybind = Options.MenuKeybind -- Allows you to have a custom keybind for the menu
+
+		return MenuGroup, AccentGroup
 	end
 
 	ThemeManager:BuildFolderTree()
