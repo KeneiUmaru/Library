@@ -16,6 +16,7 @@
         Library:SetGlow(on, size, transparency)   -- accent glow around the window
         Library:SetElementGlow(on, transparency)  -- glow under toggles, slider fills and color swatches
         Library:AddGlow(parent, size, zindex, colorKey) -- add your own glow to any frame
+        Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Suffix, Format }) -- read-only thin bar, update with :SetValue(n)
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Library.Version                           -- API version number, see bloxspin/kenya_client.lua for the check
@@ -98,7 +99,7 @@ local Library = {
     Signals = {};
     ScreenGui = ScreenGui;
 
-    Version = 5;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 6;          -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -784,6 +785,28 @@ function Library:SetGlow(Enabled, Size, Transparency)
     end;
 end;
 
+-- Places a popup at (X, Y) in ScreenGui pixels without letting it leave the screen. If it would overflow the
+-- right/bottom edge it first flips: AltX is where its RIGHT edge should sit instead, AltY where its BOTTOM edge
+-- should sit (pass nil to skip flipping); whatever still overflows is clamped inside the screen.
+function Library:PlacePopup(Frame, X, Y, AltX, AltY)
+    local View = ScreenGui.AbsoluteSize;
+    local Scale = Library.UIScale or 1;
+    local W, H = Frame.Size.X.Offset * Scale, Frame.Size.Y.Offset * Scale;
+
+    if AltX and X + W > View.X then
+        X = AltX - W;
+    end;
+
+    if AltY and Y + H > View.Y then
+        Y = AltY - H;
+    end;
+
+    Frame.Position = UDim2.fromOffset(
+        math.clamp(X, 0, math.max(View.X - W, 0)),
+        math.clamp(Y, 0, math.max(View.Y - H, 0))
+    );
+end;
+
 -- Scales the main window and every popup. 1 = default size.
 function Library:SetScale(Scale)
     Scale = math.clamp(tonumber(Scale) or 1, 0.5, 2);
@@ -873,9 +896,13 @@ do
             Parent = ScreenGui,
         });
 
-        DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
-            PickerFrameOuter.Position = UDim2.fromOffset(DisplayFrame.AbsolutePosition.X, DisplayFrame.AbsolutePosition.Y + 18);
-        end)
+        -- Below the swatch, flipping to right-aligned / above it when it would leave the screen.
+        local function PlacePicker()
+            local Pos, Size = DisplayFrame.AbsolutePosition, DisplayFrame.AbsoluteSize;
+            Library:PlacePopup(PickerFrameOuter, Pos.X, Pos.Y + 18, Pos.X + Size.X, Pos.Y - 4);
+        end;
+
+        DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(PlacePicker)
 
         Library:RegisterPopup(PickerFrameOuter);
 
@@ -1108,11 +1135,10 @@ do
                 Parent = ContextMenu.Inner,
             });
 
+            -- Right of the swatch, flipping to its left when it would leave the screen.
             local function updateMenuPosition()
-                ContextMenu.Container.Position = UDim2.fromOffset(
-                    (DisplayFrame.AbsolutePosition.X + DisplayFrame.AbsoluteSize.X) + 4,
-                    DisplayFrame.AbsolutePosition.Y + 1
-                )
+                local Pos, Size = DisplayFrame.AbsolutePosition, DisplayFrame.AbsoluteSize;
+                Library:PlacePopup(ContextMenu.Container, Pos.X + Size.X + 4, Pos.Y + 1, Pos.X - 4, Pos.Y + Size.Y);
             end
 
             local function updateMenuSize()
@@ -1141,6 +1167,7 @@ do
             });
 
             function ContextMenu:Show()
+                updateMenuPosition()
                 self.Container.Visible = true
             end
 
@@ -1286,6 +1313,7 @@ do
                 end;
             end;
 
+            PlacePicker();
             PickerFrameOuter.Visible = true;
             Library.OpenedFrames[PickerFrameOuter] = true;
         end;
@@ -1491,9 +1519,13 @@ do
             Parent = ScreenGui;
         });
 
-        ToggleLabel:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
-            ModeSelectOuter.Position = UDim2.fromOffset(ToggleLabel.AbsolutePosition.X + ToggleLabel.AbsoluteSize.X + 4, ToggleLabel.AbsolutePosition.Y + 1);
-        end);
+        -- Right of the label, flipping to its left when it would leave the screen.
+        local function PlaceModeSelect()
+            local Pos, Size = ToggleLabel.AbsolutePosition, ToggleLabel.AbsoluteSize;
+            Library:PlacePopup(ModeSelectOuter, Pos.X + Size.X + 4, Pos.Y + 1, Pos.X - 4, Pos.Y + Size.Y);
+        end;
+
+        ToggleLabel:GetPropertyChangedSignal('AbsolutePosition'):Connect(PlaceModeSelect);
 
         Library:RegisterPopup(ModeSelectOuter);
 
@@ -1701,6 +1733,7 @@ do
                     Event:Disconnect();
                 end);
             elseif Input.UserInputType == Enum.UserInputType.MouseButton2 and not Library:MouseIsOverOpenedFrame() then
+                PlaceModeSelect();
                 ModeSelectOuter.Visible = true;
             end;
         end);
@@ -2668,6 +2701,199 @@ do
         return Slider;
     end;
 
+    -- Read-only progress bar in the Linoria frame style (black outer border, inset inner frame, accent fill) but
+    -- deliberately unlike a slider so it never looks draggable: name on the left and value on the right of a row,
+    -- over a thin bar with no text inside. Update it with Options.<Idx>:SetValue(n); safe from game callbacks.
+    --   Groupbox:AddProgressBar('Level', { Text = 'Level progress', Default = 40, Min = 0, Max = 100 })
+    --   Info.Format(Value, Min, Max) -> string customises the readout; otherwise Info.Suffix or a percentage.
+    function Funcs:AddProgressBar(Idx, Info)
+        assert(Info.Text, 'AddProgressBar: Missing `Text` string.');
+
+        local ProgressBar = {
+            Value = Info.Default or 0;
+            Min = Info.Min or 0;
+            Max = Info.Max or 100;
+            Type = 'ProgressBar';
+        };
+
+        local Groupbox = self;
+        local Container = Groupbox.Container;
+
+        local Row = Library:Create('Frame', {
+            BackgroundTransparency = 1;
+            Size = UDim2.new(1, -4, 0, 14);
+            ZIndex = 5;
+            Parent = Container;
+        });
+
+        local TitleLabel = Library:CreateLabel({
+            Size = UDim2.new(1, 0, 1, 0);
+            TextSize = 14;
+            Text = Info.Text;
+            TextTruncate = Enum.TextTruncate.AtEnd;
+            TextXAlignment = Enum.TextXAlignment.Left;
+            ZIndex = 5;
+            Parent = Row;
+        });
+
+        local ValueLabel = Library:CreateLabel({
+            Size = UDim2.new(1, 0, 1, 0);
+            TextSize = 14;
+            Text = '';
+            TextXAlignment = Enum.TextXAlignment.Right;
+            ZIndex = 5;
+            Parent = Row;
+        });
+
+        Groupbox:AddBlank(2);
+
+        local BarOuter = Library:Create('Frame', {
+            BackgroundColor3 = Color3.new(0, 0, 0);
+            BorderColor3 = Color3.new(0, 0, 0);
+            Size = UDim2.new(1, -4, 0, 8);
+            ZIndex = 5;
+            Parent = Container;
+        });
+
+        Library:AddToRegistry(BarOuter, {
+            BorderColor3 = 'Black';
+        });
+
+        local BarInner = Library:Create('Frame', {
+            BackgroundColor3 = Library.MainColor;
+            BorderColor3 = Library.OutlineColor;
+            BorderMode = Enum.BorderMode.Inset;
+            Size = UDim2.new(1, 0, 1, 0);
+            ZIndex = 6;
+            Parent = BarOuter;
+        });
+
+        Library:AddToRegistry(BarInner, {
+            BackgroundColor3 = 'MainColor';
+            BorderColor3 = 'OutlineColor';
+        });
+
+        local Fill = Library:Create('Frame', {
+            BackgroundColor3 = Library.AccentColor;
+            BorderColor3 = Library.AccentColorDark;
+            Size = UDim2.new(0, 0, 1, 0);
+            ZIndex = 7;
+            Parent = BarInner;
+        });
+
+        Library:AddToRegistry(Fill, {
+            BackgroundColor3 = 'AccentColor';
+            BorderColor3 = 'AccentColorDark';
+        });
+
+        local FillGlow = Library:AddGlow(Fill, 6, 6, 'AccentColor');
+        Library:TrackElementGlow(FillGlow, function() return ProgressBar:GetFraction() > 0; end);
+
+        local HideBorderRight = Library:Create('Frame', {
+            BackgroundColor3 = Library.AccentColor;
+            BorderSizePixel = 0;
+            Position = UDim2.new(1, 0, 0, 0);
+            Size = UDim2.new(0, 1, 1, 0);
+            ZIndex = 8;
+            Parent = Fill;
+        });
+
+        Library:AddToRegistry(HideBorderRight, {
+            BackgroundColor3 = 'AccentColor';
+        });
+
+        if type(Info.Tooltip) == 'string' then
+            Library:AddToolTip(Info.Tooltip, BarOuter);
+        end;
+
+        local FillInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+
+        function ProgressBar:GetFraction()
+            local Range = ProgressBar.Max - ProgressBar.Min;
+
+            if Range <= 0 then
+                return 0;
+            end;
+
+            return math.clamp((ProgressBar.Value - ProgressBar.Min) / Range, 0, 1);
+        end;
+
+        function ProgressBar:UpdateColors()
+            Fill.BackgroundColor3 = Library.AccentColor;
+            Fill.BorderColor3 = Library.AccentColorDark;
+        end;
+
+        function ProgressBar:Display(Instant)
+            local Fraction = ProgressBar:GetFraction();
+            local Goal = UDim2.new(Fraction, 0, 1, 0);
+            local Readout;
+
+            if type(Info.Format) == 'function' then
+                Readout = tostring(Info.Format(ProgressBar.Value, ProgressBar.Min, ProgressBar.Max));
+            elseif Info.Suffix then
+                Readout = tostring(ProgressBar.Value) .. Info.Suffix;
+            else
+                Readout = string.format('%d%%', math.floor(Fraction * 100 + 0.5));
+            end;
+
+            ValueLabel.Text = Readout;
+
+            -- The name gives up room (truncating with "...") rather than running under the value.
+            TitleLabel.Size = UDim2.new(1, -(Library:GetTextBounds(Readout, Library.Font, 14) + 8), 1, 0);
+
+            if Instant then
+                Fill.Size = Goal;
+            else
+                TweenService:Create(Fill, FillInfo, { Size = Goal }):Play();
+            end;
+
+            HideBorderRight.Visible = not (Fraction == 1 or Fraction == 0);
+            Library:ApplyElementGlow(FillGlow);
+        end;
+
+        function ProgressBar:SetValue(Value)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(ProgressBar.SetValue, ProgressBar, Value);
+            end;
+
+            Value = tonumber(Value);
+
+            if not Value then
+                return;
+            end;
+
+            ProgressBar.Value = math.clamp(Value, ProgressBar.Min, math.max(ProgressBar.Min, ProgressBar.Max));
+            ProgressBar:Display();
+        end;
+
+        function ProgressBar:SetText(Text)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(ProgressBar.SetText, ProgressBar, Text);
+            end;
+
+            TitleLabel.Text = tostring(Text);
+        end;
+
+        -- Change the range, e.g. when the next level needs more XP. Keeps the current value inside it.
+        function ProgressBar:SetRange(Min, Max)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(ProgressBar.SetRange, ProgressBar, Min, Max);
+            end;
+
+            ProgressBar.Min = tonumber(Min) or ProgressBar.Min;
+            ProgressBar.Max = tonumber(Max) or ProgressBar.Max;
+            ProgressBar:SetValue(ProgressBar.Value);
+        end;
+
+        ProgressBar:Display(true);
+        Groupbox:AddBlank(Info.BlankSize or 6);
+        Groupbox:Resize();
+
+        Options[Idx] = ProgressBar;
+
+        return ProgressBar;
+    end;
+
     function Funcs:AddDropdown(Idx, Info)
         if Info.SpecialType == 'Player' then
             Info.Values = GetPlayersString();
@@ -2793,8 +3019,10 @@ do
             Parent = ScreenGui;
         });
 
+        -- Below the dropdown, flipping above it when the list would run off the bottom of the screen.
         local function RecalculateListPosition()
-            ListOuter.Position = UDim2.fromOffset(DropdownOuter.AbsolutePosition.X, DropdownOuter.AbsolutePosition.Y + DropdownOuter.Size.Y.Offset + 1);
+            local Pos, Size = DropdownOuter.AbsolutePosition, DropdownOuter.AbsoluteSize;
+            Library:PlacePopup(ListOuter, Pos.X, Pos.Y + Size.Y + 1, nil, Pos.Y - 1);
         end;
 
         local function RecalculateListSize(YSize)
@@ -3013,6 +3241,7 @@ do
         end;
 
         function Dropdown:OpenDropdown()
+            RecalculateListPosition();
             ListOuter.Visible = true;
             Library.OpenedFrames[ListOuter] = true;
             DropdownArrow.Rotation = 180;
