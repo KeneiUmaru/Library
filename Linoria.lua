@@ -4346,6 +4346,34 @@ function Library:CreateWindow(...)
         WindowLabel.Text = Title;
     end;
 
+    -- Removes this window, its sections and their floating panels. For scripts that rebuild their window on the
+    -- same library (a re-run with the library kept), which otherwise stacks a new window on the old one.
+    function Window:Destroy()
+        for Index = #Library.Sections, 1, -1 do
+            local Section = Library.Sections[Index];
+
+            if Section.Tab.WindowOuter == Outer then
+                if Section.Gui then
+                    Section.Gui:Destroy();
+                end;
+
+                table.remove(Library.Sections, Index);
+            end;
+        end;
+
+        -- the first window's scale / glow / border objects are what SetScale, SetGlow and the accent update; let the
+        -- next window take those slots
+        for _, Key in next, { 'MainWindow', 'WindowScale', 'WindowGlow', 'WindowBorderGradient' } do
+            local Object = Library[Key];
+
+            if Object and (Object == Outer or Object:IsDescendantOf(Outer)) then
+                Library[Key] = nil;
+            end;
+        end;
+
+        Outer:Destroy();
+    end;
+
     function Window:AddTab(Name)
         local Tab = {
             Groupboxes = {};
