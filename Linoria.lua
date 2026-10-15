@@ -19,6 +19,12 @@
         Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Suffix, Format }) -- read-only thin bar, update with :SetValue(n)
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
+        Sections (every groupbox / tabbox)        -- -/+ folds it; drag its title to move it (accent box = where it
+                                                  -- lands); drop it outside the window to float it, its pin square
+                                                  -- keeps it shown while the menu is hidden. Library:GetLayout(),
+                                                  -- :ApplyLayout(t), :SaveLayout(), :LoadLayout(), :ResetLayout();
+                                                  -- saved to Library.LayoutFile (SaveManager:SetFolder sets it,
+                                                  -- SaveManager:LoadAutoloadConfig loads it)
         Library.Version                           -- API version number, see bloxspin/kenya_client.lua for the check
         Library.RainbowSpeed / Library.GradientSpread / Library.MenuFadeTime -- live-tunable numbers
         Library.GradientMode ('Rainbow'|'Custom'), GradientDirection ('Vertical'|'Horizontal'|'Diagonal'),
@@ -52,7 +58,12 @@ local ScreenGui = Instance.new('ScreenGui');
 ProtectGui(ScreenGui);
 
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global;
+-- Floating sections (see Library:RegisterSection) each get their own ScreenGui below this one, so the popups they
+-- open (dropdown lists, color pickers, tooltips: all in ScreenGui) draw over them.
+ScreenGui.DisplayOrder = 1000;
 ScreenGui.Parent = CoreGui;
+
+local PanelGuis = {};
 
 local Toggles = {};
 local Options = {};
@@ -98,8 +109,9 @@ local Library = {
 
     Signals = {};
     ScreenGui = ScreenGui;
+    PanelGuis = PanelGuis;
 
-    Version = 6;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 7;          -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -690,6 +702,10 @@ function Library:Unload()
     end
 
     ScreenGui:Destroy()
+
+    for _, Gui in next, PanelGuis do
+        Gui:Destroy()
+    end
 end
 
 function Library:OnUnload(Callback)
@@ -697,6 +713,11 @@ function Library:OnUnload(Callback)
 end
 
 Library:GiveSignal(ScreenGui.DescendantRemoving:Connect(function(Instance)
+    -- a section moving to / from its floating layer is not being destroyed: keep its colors updating
+    if Library.MovingSection then
+        return;
+    end;
+
     if Library.RegistryMap[Instance] then
         Library:RemoveFromRegistry(Instance);
     end;
@@ -3729,6 +3750,445 @@ function Library:Notify(Text, Time)
     end);
 end;
 
+-- =====================================================================
+-- Sections: every groupbox and tabbox can be folded (the -/+ in its header), dragged by its header to another
+-- spot in its tab (an accent box shows where it will land), or dropped outside the window to float as its own
+-- panel. A floating panel's pin square keeps it on screen while the menu is hidden (StayOnHide). The layout is
+-- written to Library.LayoutFile (SaveManager:SetFolder sets it) after every change.
+-- =====================================================================
+Library.Sections = {};
+Library.LayoutFile = nil;
+Library.Toggled = false;
+
+local SectionDragThreshold = 6;     -- px of mouse travel before a header press becomes a drag
+local SectionPlaceholder, SectionPlaceholderStroke;
+
+local function MousePoint()
+    return Vector2.new(Mouse.X, Mouse.Y);
+end;
+
+local function PointInFrame(Frame, Point)
+    local Pos, Size = Frame.AbsolutePosition, Frame.AbsoluteSize;
+    return Point.X >= Pos.X and Point.X <= Pos.X + Size.X and Point.Y >= Pos.Y and Point.Y <= Pos.Y + Size.Y;
+end;
+
+local function SortedBoxes(Column, Skip)
+    local Boxes = {};
+
+    for _, Child in next, Column:GetChildren() do
+        if Child:IsA('GuiObject') and Child ~= Skip and Child ~= SectionPlaceholder then
+            table.insert(Boxes, Child);
+        end;
+    end;
+
+    table.sort(Boxes, function(A, B)
+        return A.LayoutOrder < B.LayoutOrder;
+    end);
+
+    return Boxes;
+end;
+
+local function RenumberColumn(Column)
+    for Index, Box in next, SortedBoxes(Column) do
+        Box.LayoutOrder = Index * 10;
+    end;
+end;
+
+-- Moves a section's box; the flag stops ScreenGui.DescendantRemoving from dropping its theme registrations.
+local function MoveSectionBox(Section, Parent)
+    Library.MovingSection = true;
+    local Ok, Err = pcall(function()
+        Section.Outer.Parent = Parent;
+    end);
+    Library.MovingSection = false;
+
+    if not Ok then
+        warn(Err);
+    end;
+end;
+
+-- Front-most floating panel. With Global ZIndex, elements of two overlapping panels interleaved (one's dropdown
+-- and buttons showing through the other, live 2026-10-15; a CanvasGroup per panel did not separate them), so each
+-- panel has its own ScreenGui and DisplayOrder decides which is on top: 1..999, under the menu's 1000.
+local PanelTop = 0;
+
+local function RaiseSection(Section)
+    if PanelTop >= 998 then
+        local Order = {};
+
+        for _, Other in next, Library.Sections do
+            if Other.Gui then
+                table.insert(Order, Other);
+            end;
+        end;
+
+        table.sort(Order, function(A, B)
+            return A.Gui.DisplayOrder < B.Gui.DisplayOrder;
+        end);
+
+        for Index, Other in next, Order do
+            Other.Gui.DisplayOrder = Index;
+        end;
+
+        PanelTop = #Order;
+    end;
+
+    PanelTop = PanelTop + 1;
+    Section.Gui.DisplayOrder = PanelTop;
+end;
+
+-- Section frames float inside a holder with its own UIScale, so they keep the window's size.
+local function SectionHolder(Section)
+    if not Section.Holder then
+        local Gui = Instance.new('ScreenGui');
+        ProtectGui(Gui);
+        Gui.ZIndexBehavior = Enum.ZIndexBehavior.Global;
+        Gui.DisplayOrder = 1;
+        Gui.Parent = CoreGui;
+        table.insert(PanelGuis, Gui);
+        Section.Gui = Gui;
+
+        Section.Holder = Library:Create('Frame', {
+            BackgroundTransparency = 1;
+            AutomaticSize = Enum.AutomaticSize.Y;
+            Size = UDim2.fromOffset(260, 0);
+            Visible = false;
+            ZIndex = 1;
+            Parent = Gui;
+        });
+
+        Library:RegisterPopup(Section.Holder);
+
+        Section.Holder.InputBegan:Connect(function(Input)
+            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+                RaiseSection(Section);
+            end;
+        end);
+    end;
+
+    return Section.Holder;
+end;
+
+function Library:UpdateSectionButtons(Section)
+    Section.FoldButton.Text = Section.Folded and '+' or '-';
+    Section.PinButton.Visible = Section.Floating;
+    Section.PinButton.BackgroundColor3 = Section.Stay and Library.AccentColor or Library.MainColor;
+
+    if Section.Holder then
+        Section.Holder.Visible = Section.Floating and (Section.Stay or Library.Toggled);
+    end;
+end;
+
+function Library:SetSectionFolded(Section, Folded)
+    Section.Folded = Folded and true or false;
+    Section.ApplyFold();
+    Library:UpdateSectionButtons(Section);
+end;
+
+function Library:DockSection(Section, Side, Order)
+    local Column = Side == 2 and Section.Tab.RightSide or Section.Tab.LeftSide;
+
+    Section.Outer.LayoutOrder = Order or Section.DefaultOrder;
+    MoveSectionBox(Section, Column);
+    Section.Floating = false;
+    RenumberColumn(Column);
+    Library:UpdateSectionButtons(Section);
+end;
+
+function Library:FloatSection(Section, X, Y)
+    local Holder = SectionHolder(Section);
+    local Screen = ScreenGui.AbsoluteSize;
+
+    Section.Width = Section.Width or (Section.Tab.LeftSide.AbsoluteSize.X / Library.UIScale);
+    Holder.Size = UDim2.fromOffset(Section.Width, 0);
+    -- keep at least the header on screen (the screen can be smaller than when the layout was saved)
+    Holder.Position = UDim2.fromOffset(
+        math.clamp(X, 0, math.max(Screen.X - 40, 0)),
+        math.clamp(Y, 0, math.max(Screen.Y - 20, 0))
+    );
+    MoveSectionBox(Section, Holder);
+    Section.Floating = true;
+    RaiseSection(Section);
+    Library:UpdateSectionButtons(Section);
+end;
+
+-- Floating panels without StayOnHide follow the menu; called by Library:Toggle.
+function Library:UpdateFloatingSections()
+    for _, Section in next, Library.Sections do
+        if Section.Holder then
+            Section.Holder.Visible = Section.Floating and (Section.Stay or Library.Toggled);
+        end;
+    end;
+end;
+
+function Library:GetLayout()
+    local Data = {};
+
+    for _, Section in next, Library.Sections do
+        local Entry = { Folded = Section.Folded };
+
+        if Section.Floating then
+            Entry.Float = { Section.Holder.Position.X.Offset, Section.Holder.Position.Y.Offset };
+            Entry.Width = Section.Width;
+            Entry.Stay = Section.Stay;
+        else
+            Entry.Side = Section.Outer.Parent == Section.Tab.RightSide and 2 or 1;
+            Entry.Order = Section.Outer.LayoutOrder;
+        end;
+
+        Data[Section.Key] = Entry;
+    end;
+
+    return Data;
+end;
+
+function Library:ApplyLayout(Data)
+    if type(Data) ~= 'table' then
+        return;
+    end;
+
+    for _, Section in next, Library.Sections do
+        local Entry = Data[Section.Key];
+
+        if type(Entry) == 'table' then
+            if type(Entry.Float) == 'table' then
+                Section.Width = tonumber(Entry.Width) or Section.Width;
+                Section.Stay = Entry.Stay ~= false;
+                Library:FloatSection(Section, tonumber(Entry.Float[1]) or 0, tonumber(Entry.Float[2]) or 0);
+            elseif Entry.Side then
+                Library:DockSection(Section, tonumber(Entry.Side), tonumber(Entry.Order));
+            end;
+
+            Library:SetSectionFolded(Section, Entry.Folded == true);
+        end;
+    end;
+end;
+
+function Library:SaveLayout()
+    if not (Library.LayoutFile and writefile) then
+        return;
+    end;
+
+    pcall(function()
+        writefile(Library.LayoutFile, game:GetService('HttpService'):JSONEncode(Library:GetLayout()));
+    end);
+end;
+
+function Library:LoadLayout()
+    if not (Library.LayoutFile and isfile and isfile(Library.LayoutFile)) then
+        return;
+    end;
+
+    local Ok, Data = pcall(function()
+        return game:GetService('HttpService'):JSONDecode(readfile(Library.LayoutFile));
+    end);
+
+    if Ok then
+        Library:ApplyLayout(Data);
+    end;
+end;
+
+function Library:ResetLayout()
+    for _, Section in next, Library.Sections do
+        Section.Stay = true;
+        Library:DockSection(Section, Section.DefaultSide, Section.DefaultOrder);
+        Library:SetSectionFolded(Section, false);
+    end;
+
+    Library:SaveLayout();
+end;
+
+-- The column of the section's own tab under Point, and the LayoutOrder that puts the box in front of the first
+-- box whose middle is below Point (or at the end).
+local function SectionDropTarget(Section, Point)
+    local Tab = Section.Tab;
+
+    if not (Tab.WindowOuter.Visible and Tab.Frame.Visible) then
+        return;
+    end;
+
+    for _, Column in next, { Tab.LeftSide, Tab.RightSide } do
+        if PointInFrame(Column, Point) then
+            local Order = 5;
+
+            for _, Box in next, SortedBoxes(Column, Section.Outer) do
+                if Point.Y < Box.AbsolutePosition.Y + Box.AbsoluteSize.Y / 2 then
+                    return Column, Box.LayoutOrder - 5;
+                end;
+
+                Order = Box.LayoutOrder + 5;
+            end;
+
+            return Column, Order;
+        end;
+    end;
+end;
+
+local function DragSection(Section)
+    local Start = MousePoint();
+
+    while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+        if (MousePoint() - Start).Magnitude >= SectionDragThreshold then
+            break;
+        end;
+
+        RenderStepped:Wait();
+    end;
+
+    if Library.DraggingSection or not InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        return; -- a click, not a drag
+    end;
+
+    Library.DraggingSection = Section;
+
+    local Box = Section.Outer;
+    local Grab = Start - Box.AbsolutePosition;
+    local From = { Floating = Section.Floating, Parent = Box.Parent, Order = Box.LayoutOrder };
+
+    if not SectionPlaceholder then
+        SectionPlaceholder = Library:Create('Frame', {
+            BackgroundTransparency = 0.85;
+            BorderSizePixel = 0;
+            ZIndex = 2;
+        });
+
+        SectionPlaceholderStroke = Library:Create('UIStroke', {
+            Thickness = 1;
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+            Parent = SectionPlaceholder;
+        });
+    end;
+
+    SectionPlaceholder.BackgroundColor3 = Library.AccentColor;
+    SectionPlaceholderStroke.Color = Library.AccentColor;
+    SectionPlaceholder.Size = UDim2.new(1, 0, 0, Box.AbsoluteSize.Y / Library.UIScale);
+
+    if not Section.Floating then
+        Section.Width = Box.AbsoluteSize.X / Library.UIScale;
+    end;
+
+    local Holder = SectionHolder(Section);
+    Holder.Size = UDim2.fromOffset(Section.Width, 0);
+    Holder.Position = UDim2.fromOffset(Box.AbsolutePosition.X, Box.AbsolutePosition.Y);
+    MoveSectionBox(Section, Holder);
+    RaiseSection(Section);
+    Holder.Visible = true;
+    Section.Gui.DisplayOrder = ScreenGui.DisplayOrder + 1; -- over the window while it moves
+
+    local Column, Order;
+
+    while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+        local Point = MousePoint();
+        Holder.Position = UDim2.fromOffset(Point.X - Grab.X, Point.Y - Grab.Y);
+        Column, Order = SectionDropTarget(Section, Point);
+
+        if Column then
+            SectionPlaceholder.LayoutOrder = Order;
+            SectionPlaceholder.Parent = Column;
+        else
+            SectionPlaceholder.Parent = nil;
+        end;
+
+        RenderStepped:Wait();
+    end;
+
+    SectionPlaceholder.Parent = nil;
+    Library.DraggingSection = nil;
+    RaiseSection(Section); -- back under the menu, on top of the other panels
+
+    local Point = MousePoint();
+    local Window = Section.Tab.WindowOuter;
+
+    if Column then
+        Library:DockSection(Section, Column == Section.Tab.RightSide and 2 or 1, Order);
+    elseif Window.Visible and PointInFrame(Window, Point) then
+        -- dropped on the window but not on a column (title, tab bar): put it back
+        if From.Floating then
+            Library:FloatSection(Section, Point.X - Grab.X, Point.Y - Grab.Y);
+        else
+            Library:DockSection(Section, From.Parent == Section.Tab.RightSide and 2 or 1, From.Order);
+        end;
+    else
+        Library:FloatSection(Section, Point.X - Grab.X, Point.Y - Grab.Y);
+    end;
+
+    Library:SaveLayout();
+end;
+
+-- Info: Key, Outer (the box frame), Inner (where the header buttons go), Tab (the window tab's columns),
+-- Side, HeaderHeight (px from the top that starts a drag). The caller sets Section.ApplyFold.
+function Library:RegisterSection(Info)
+    local Section = {
+        Key = Info.Key;
+        Outer = Info.Outer;
+        Tab = Info.Tab;
+        HeaderHeight = Info.HeaderHeight;
+        DefaultSide = Info.Side;
+        DefaultOrder = Info.Outer.LayoutOrder;
+        Folded = false;
+        Floating = false;
+        Stay = true;
+        ApplyFold = function() end;
+    };
+
+    Section.FoldButton = Library:CreateLabel({
+        Position = UDim2.new(1, -16, 0, 2);
+        Size = UDim2.fromOffset(14, 16);
+        Text = '-';
+        TextSize = 14;
+        TextXAlignment = Enum.TextXAlignment.Center;
+        ZIndex = 12;
+        Parent = Info.Inner;
+    });
+
+    Section.PinButton = Library:Create('Frame', {
+        BackgroundColor3 = Library.AccentColor;
+        BorderColor3 = Library.OutlineColor;
+        Position = UDim2.new(1, -28, 0, 7);
+        Size = UDim2.fromOffset(7, 7);
+        Visible = false;
+        ZIndex = 12;
+        Parent = Info.Inner;
+    });
+
+    Library:AddToRegistry(Section.PinButton, {
+        BackgroundColor3 = function()
+            return Section.Stay and Library.AccentColor or Library.MainColor;
+        end;
+        BorderColor3 = 'OutlineColor';
+    });
+
+    Library:AddToolTip('Stay on screen while the menu is hidden', Section.PinButton);
+
+    Section.FoldButton.InputBegan:Connect(function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+            Library:SetSectionFolded(Section, not Section.Folded);
+            Library:SaveLayout();
+        end;
+    end);
+
+    Section.PinButton.InputBegan:Connect(function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+            Section.Stay = not Section.Stay;
+            Library:UpdateSectionButtons(Section);
+            Library:SaveLayout();
+        end;
+    end);
+
+    Section.Outer.InputBegan:Connect(function(Input)
+        if Input.UserInputType ~= Enum.UserInputType.MouseButton1 or Library:MouseIsOverOpenedFrame() then
+            return;
+        end;
+
+        if (Mouse.Y - Section.Outer.AbsolutePosition.Y) / Library.UIScale <= Section.HeaderHeight then
+            DragSection(Section);
+        end;
+    end);
+
+    table.insert(Library.Sections, Section);
+    return Section;
+end;
+
 function Library:CreateWindow(...)
     local Arguments = { ... }
     local Config = { AnchorPoint = Vector2.zero }
@@ -4027,6 +4487,15 @@ function Library:CreateWindow(...)
             end);
         end;
 
+        -- what a section needs to find its way back (see Library:RegisterSection)
+        local SectionTab = { Name = Name, LeftSide = LeftSide, RightSide = RightSide, Frame = TabFrame, WindowOuter = Outer };
+        local SectionCount, TabboxCount = 0, 0;
+
+        local function NextSectionOrder()
+            SectionCount = SectionCount + 1;
+            return SectionCount * 10;
+        end;
+
         function Tab:ShowTab()
             for _, Tab in next, Window.Tabs do
                 Tab:HideTab();
@@ -4058,6 +4527,7 @@ function Library:CreateWindow(...)
                 BorderColor3 = Library.OutlineColor;
                 BorderMode = Enum.BorderMode.Inset;
                 Size = UDim2.new(1, 0, 0, 507 + 2);
+                LayoutOrder = NextSectionOrder();
                 ZIndex = 2;
                 Parent = Info.Side == 1 and LeftSide or RightSide;
             });
@@ -4117,7 +4587,26 @@ function Library:CreateWindow(...)
                 Parent = Container;
             });
 
+            local Section = Library:RegisterSection({
+                Key = Name .. '/' .. tostring(Info.Name);
+                Outer = BoxOuter;
+                Inner = BoxInner;
+                Tab = SectionTab;
+                Side = Info.Side == 1 and 1 or 2;
+                HeaderHeight = 20;
+            });
+
+            Section.ApplyFold = function()
+                Container.Visible = not Section.Folded;
+                Groupbox:Resize();
+            end;
+
             function Groupbox:Resize()
+                if Section.Folded then
+                    BoxOuter.Size = UDim2.new(1, 0, 0, 20 + 2 + 2);
+                    return;
+                end;
+
                 local Size = 0;
 
                 for _, Element in next, Groupbox.Container:GetChildren() do
@@ -4158,6 +4647,7 @@ function Library:CreateWindow(...)
                 BorderColor3 = Library.OutlineColor;
                 BorderMode = Enum.BorderMode.Inset;
                 Size = UDim2.new(1, 0, 0, 0);
+                LayoutOrder = NextSectionOrder();
                 ZIndex = 2;
                 Parent = Info.Side == 1 and LeftSide or RightSide;
             });
@@ -4202,10 +4692,31 @@ function Library:CreateWindow(...)
             local TabboxButtons = Library:Create('Frame', {
                 BackgroundTransparency = 1;
                 Position = UDim2.new(0, 0, 0, TabStripTop);
-                Size = UDim2.new(1, 0, 0, TabStripHeight);
+                Size = UDim2.new(1, -18, 0, TabStripHeight); -- room for the fold button
                 ZIndex = 5;
                 Parent = BoxInner;
             });
+
+            TabboxCount = TabboxCount + 1;
+
+            local Section = Library:RegisterSection({
+                Key = Name .. '/' .. (Info.Name or ('#tabbox' .. TabboxCount));
+                Outer = BoxOuter;
+                Inner = BoxInner;
+                Tab = SectionTab;
+                Side = Info.Side == 1 and 1 or 2;
+                HeaderHeight = ContentTop;
+            });
+
+            Section.ApplyFold = function()
+                for _, SubTab in next, Tabbox.Tabs do
+                    SubTab.Container.Visible = (not Section.Folded) and Tabbox.ActiveTab == SubTab;
+                end;
+
+                if Tabbox.ActiveTab then
+                    Tabbox.ActiveTab:Resize();
+                end;
+            end;
 
             Library:Create('UIListLayout', {
                 FillDirection = Enum.FillDirection.Horizontal;
@@ -4316,7 +4827,8 @@ function Library:CreateWindow(...)
                     end;
 
                     Active = true;
-                    Container.Visible = true;
+                    Tabbox.ActiveTab = Tab;
+                    Container.Visible = not Section.Folded;
                     FadeLabel(0);
                     local Width = math.min(UnderlineWidth, math.max(Button.AbsoluteSize.X - 6, 0));
                     TweenService:Create(Underline, TabInfo, { Size = UDim2.new(0, Width > 0 and Width or UnderlineWidth, 0, 2) }):Play();
@@ -4342,6 +4854,11 @@ function Library:CreateWindow(...)
                         if not Button:IsA('UIListLayout') then
                             Button.Size = UDim2.new(1 / TabCount, 0, 1, 0);
                         end;
+                    end;
+
+                    if Section.Folded then
+                        BoxOuter.Size = UDim2.new(1, 0, 0, ContentTop + 2);
+                        return;
                     end;
 
                     if (not Container.Visible) then
@@ -4518,6 +5035,8 @@ function Library:CreateWindow(...)
 
         Toggled = (not not State);
         ModalElement.Modal = Toggled;
+        Library.Toggled = Toggled;
+        Library:UpdateFloatingSections();
 
         ToggleGeneration = ToggleGeneration + 1;
         local Generation = ToggleGeneration;
@@ -4943,6 +5462,7 @@ local ThemeManager = {} do
 		Toggles.WindowGlow:OnChanged(ApplyGlow)
 		Options.GlowSize:OnChanged(ApplyGlow)
 		Options.GlowStrength:OnChanged(ApplyGlow)
+		MenuGroup:AddButton({ Text = 'Reset layout', Func = function() Library:ResetLayout() end, Tooltip = 'Drag a section by its title to move it, or drop it outside the menu to keep it on screen. This puts every section back' })
 		MenuGroup:AddButton('Unload', function() Library:Unload() end)
 
 		local AccentGroup = tab:AddRightGroupbox('Accent')
@@ -5089,7 +5609,9 @@ local SaveManager = {} do
 
 	function SaveManager:SetFolder(folder)
 		self.Folder = folder;
-		self:BuildFolderTree()
+		self:BuildFolderTree();
+		-- section layout (moved / folded / floating boxes) lives next to the configs and saves itself
+		(self.Library or Library).LayoutFile = folder .. '/layout.json'
 	end
 
 	function SaveManager:Save(name)
@@ -5199,6 +5721,9 @@ local SaveManager = {} do
 	end
 
 	function SaveManager:LoadAutoloadConfig()
+		-- hubs call this once every section exists, so it is also where the saved layout goes back on
+		self.Library:LoadLayout()
+
 		if isfile(self.Folder .. '/settings/autoload.txt') then
 			local name = readfile(self.Folder .. '/settings/autoload.txt')
 
