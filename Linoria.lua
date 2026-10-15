@@ -2041,12 +2041,15 @@ do
 
             ProcessButtonParams('SubButton', SubButton, ...)
 
-            self.Outer.Size = UDim2.new(0.5, -2, 0, 20)
+            -- Two halves of the full-width button (1, -4) with a 4 px gap. The sub button sizes from the first one
+            -- instead of copying its AbsoluteSize, which went stale under UI scale / floating sections and pushed
+            -- it past the box edge.
+            self.Outer.Size = UDim2.new(0.5, -4, 0, 20)
 
             SubButton.Outer, SubButton.Inner, SubButton.Label = CreateBaseButton(SubButton)
 
-            SubButton.Outer.Position = UDim2.new(1, 3, 0, 0)
-            SubButton.Outer.Size = UDim2.fromOffset(self.Outer.AbsoluteSize.X - 2, self.Outer.AbsoluteSize.Y)
+            SubButton.Outer.Position = UDim2.new(1, 4, 0, 0)
+            SubButton.Outer.Size = UDim2.new(1, 0, 1, 0)
             SubButton.Outer.Parent = self.Outer
 
             function SubButton:AddTooltip(tooltip)
