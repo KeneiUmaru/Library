@@ -25,6 +25,9 @@
                                                   -- :ApplyLayout(t), :SaveLayout(), :LoadLayout(), :ResetLayout();
                                                   -- saved to Library.LayoutFile (SaveManager:SetFolder sets it,
                                                   -- SaveManager:LoadAutoloadConfig loads it)
+        Library.Animations = true                 -- eased toggles, sliders, hovers, dropdowns, tab switch, folding, button
+                                                  -- flash, notifications and the menu fade; false snaps them (Settings >
+                                                  -- Menu > Animations). Library:Animate(inst, time, goal) / :CreateTween
         Library.Version                           -- API version number, see bloxspin/kenya_client.lua for the check
         Library.RainbowSpeed / Library.GradientSpread / Library.MenuFadeTime -- live-tunable numbers
         Library.GradientMode ('Rainbow'|'Custom'), GradientDirection ('Vertical'|'Horizontal'|'Diagonal'),
@@ -111,12 +114,13 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 7;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 8;          -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
     GradientSpread = 0.35;-- hue range spread across the window when GradientAccent is on (rainbow mode)
     MenuFadeTime = nil;   -- overrides the window's MenuFadeTime when set (seconds)
+    Animations = true;    -- eased UI changes (see Library:CreateTween); false makes everything snap
 
     -- Accent gradient options (see Library:GetAccentAt)
     GradientMode = 'Rainbow';          -- 'Rainbow' (hue wheel) or 'Custom' (blend GradientColorA -> GradientColorB)
@@ -189,6 +193,30 @@ end))
 --   Rainbow mode: hue = phase - Fraction * GradientSpread (so the hue wheel is spread across the window).
 --   Custom mode:  blend GradientColorA -> GradientColorB; with animation on, the blend flows across the window.
 -- Without GradientAccent every element uses Fraction 0, i.e. one flat (possibly animated) color.
+-- Every animation in the library goes through here. With Library.Animations off it returns a stand-in whose
+-- Play applies the goal at once, so callers never need two code paths.
+function Library:CreateTween(Instance, Info, Goal)
+    if Library.Animations then
+        return TweenService:Create(Instance, Info, Goal);
+    end;
+
+    return {
+        Play = function()
+            for Property, Value in next, Goal do
+                Instance[Property] = Value;
+            end;
+        end;
+        Cancel = function() end;
+    };
+end;
+
+-- Time-and-goal shorthand for one eased change (Quad, Out).
+function Library:Animate(Instance, Time, Goal)
+    local Tween = Library:CreateTween(Instance, TweenInfo.new(Time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), Goal);
+    Tween:Play();
+    return Tween;
+end;
+
 function Library:GetAccentAt(Fraction)
     local Gradient = Library.GradientAccent;
 
@@ -558,11 +586,12 @@ function Library:AddToolTip(InfoStr, HoverInstance)
 end
 
 function Library:OnHighlight(HighlightInstance, Instance, Properties, PropertiesDefault)
+    -- hover colors ease in and out (Library.Animations)
     HighlightInstance.MouseEnter:Connect(function()
         local Reg = Library.RegistryMap[Instance];
 
         for Property, ColorIdx in next, Properties do
-            Instance[Property] = Library[ColorIdx] or ColorIdx;
+            Library:Animate(Instance, 0.1, { [Property] = Library[ColorIdx] or ColorIdx });
 
             if Reg and Reg.Properties[Property] then
                 Reg.Properties[Property] = ColorIdx;
@@ -574,7 +603,7 @@ function Library:OnHighlight(HighlightInstance, Instance, Properties, Properties
         local Reg = Library.RegistryMap[Instance];
 
         for Property, ColorIdx in next, PropertiesDefault do
-            Instance[Property] = Library[ColorIdx] or ColorIdx;
+            Library:Animate(Instance, 0.15, { [Property] = Library[ColorIdx] or ColorIdx });
 
             if Reg and Reg.Properties[Property] then
                 Reg.Properties[Property] = ColorIdx;
@@ -774,7 +803,7 @@ function Library:ApplyElementGlow(Glow, Instant)
     if Instant then
         Glow.ImageTransparency = Target;
     else
-        TweenService:Create(Glow, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { ImageTransparency = Target }):Play();
+        Library:CreateTween(Glow, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { ImageTransparency = Target }):Play();
     end;
 end;
 
@@ -1995,6 +2024,12 @@ do
                 if not ValidateClick(Input) then return end
                 if Button.Locked then return end
 
+                -- press flash: accent, easing back to the normal fill (Library.Animations)
+                if Library.Animations then
+                    Button.Inner.BackgroundColor3 = Library.AccentColorDark
+                    Library:Animate(Button.Inner, 0.3, { BackgroundColor3 = Library.MainColor })
+                end
+
                 if Button.DoubleClick then
                     Library:RemoveFromRegistry(Button.Label)
                     Library:AddToRegistry(Button.Label, { TextColor3 = 'AccentColor' })
@@ -2446,10 +2481,10 @@ do
                     ToggleLabelStroke.Transparency = LabelFade;
                 end;
             else
-                TweenService:Create(ToggleInner, FadeInfo, { Size = FillSize }):Play();
-                TweenService:Create(ToggleLabel, FadeInfo, { TextTransparency = LabelFade }):Play();
+                Library:CreateTween(ToggleInner, FadeInfo, { Size = FillSize }):Play();
+                Library:CreateTween(ToggleLabel, FadeInfo, { TextTransparency = LabelFade }):Play();
                 if ToggleLabelStroke then
-                    TweenService:Create(ToggleLabelStroke, FadeInfo, { Transparency = LabelFade }):Play();
+                    Library:CreateTween(ToggleLabelStroke, FadeInfo, { Transparency = LabelFade }):Play();
                 end;
             end;
         end;
@@ -2583,7 +2618,8 @@ do
         });
 
         local FillGlow = Library:AddGlow(Fill, 6, 6, 'AccentColor');
-        Library:TrackElementGlow(FillGlow, function() return Fill.Size.X.Offset > 0; end);
+        -- the value, not Fill.Size: the fill is tweened, and right after a change it still has its old width
+        Library:TrackElementGlow(FillGlow, function() return Slider.Value > Slider.Min; end);
 
         local HideBorderRight = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
@@ -2632,7 +2668,7 @@ do
             end
 
             local X = math.ceil(Library:MapValue(Slider.Value, Slider.Min, Slider.Max, 0, Slider.MaxSize));
-            Fill.Size = UDim2.new(0, X, 1, 0);
+            Library:Animate(Fill, 0.08, { Size = UDim2.new(0, X, 1, 0) });
             Library:ApplyElementGlow(FillGlow, true);
 
             HideBorderRight.Visible = not (X == Slider.MaxSize or X == 0);
@@ -2868,7 +2904,7 @@ do
             if Instant then
                 Fill.Size = Goal;
             else
-                TweenService:Create(Fill, FillInfo, { Size = Goal }):Play();
+                Library:CreateTween(Fill, FillInfo, { Size = Goal }):Play();
             end;
 
             HideBorderRight.Visible = not (Fraction == 1 or Fraction == 0);
@@ -3268,13 +3304,16 @@ do
             RecalculateListPosition();
             ListOuter.Visible = true;
             Library.OpenedFrames[ListOuter] = true;
-            DropdownArrow.Rotation = 180;
+            -- the list's contents drop in a few px and the arrow turns (Library.Animations)
+            ListInner.Position = UDim2.fromOffset(0, Library.Animations and -6 or 0);
+            Library:Animate(ListInner, 0.12, { Position = UDim2.new() });
+            Library:Animate(DropdownArrow, 0.15, { Rotation = 180 });
         end;
 
         function Dropdown:CloseDropdown()
             ListOuter.Visible = false;
             Library.OpenedFrames[ListOuter] = nil;
-            DropdownArrow.Rotation = 0;
+            Library:Animate(DropdownArrow, 0.15, { Rotation = 0 });
         end;
 
         function Dropdown:OnChanged(Func)
@@ -3740,14 +3779,14 @@ function Library:Notify(Text, Time)
         BackgroundColor3 = 'AccentColor';
     }, true);
 
-    pcall(NotifyOuter.TweenSize, NotifyOuter, UDim2.new(0, XSize + 8 + 4, 0, YSize), 'Out', 'Quad', 0.4, true);
+    Library:Animate(NotifyOuter, 0.4, { Size = UDim2.new(0, XSize + 8 + 4, 0, YSize) });
 
     task.spawn(function()
         task.wait(Time or 5);
 
-        pcall(NotifyOuter.TweenSize, NotifyOuter, UDim2.new(0, 0, 0, YSize), 'Out', 'Quad', 0.4, true);
+        Library:Animate(NotifyOuter, 0.4, { Size = UDim2.new(0, 0, 0, YSize) });
 
-        task.wait(0.4);
+        task.wait(Library.Animations and 0.4 or 0);
 
         NotifyOuter:Destroy();
     end);
@@ -3882,10 +3921,101 @@ function Library:UpdateSectionButtons(Section)
     end;
 end;
 
-function Library:SetSectionFolded(Section, Folded)
-    Section.Folded = Folded and true or false;
-    Section.ApplyFold();
+-- Folding (Library.Animations): the content fades out while the box closes, then hides; unfolding grows the box while
+-- its rows fade in top to bottom a beat apart, and the -/+ spins. FoldRest / UnfoldRest keep the content's real
+-- transparencies, so a fold interrupted halfway never leaves rows half faded. Instant: no animation (layout loading).
+local FOLD_TIME = 0.22;
+local ROW_FADE_TIME = 0.1; -- each row's own fade-in once the edge reaches it
+
+function Library:SetSectionFolded(Section, Folded, Instant)
+    Folded = Folded and true or false;
+
+    local Outer = Section.Outer;
+    local Content = Section.Content and Section.Content();
+    local Animate = Library.Animations and not Instant and Content ~= nil and Folded ~= Section.Folded;
+    local Token = {};
+    Section.FoldToken = Token;
+    Section.Animating = nil;
+
+    if Section.FoldRest then
+        Library:RestoreTree(Section.FoldRest); -- a fold-out that was still running
+        Section.FoldRest = nil;
+    end;
+
+    Section.Folded = Folded;
     Library:UpdateSectionButtons(Section);
+
+    if not Animate then
+        Section.ApplyFold();
+        Outer.ClipsDescendants = false;
+        return;
+    end;
+
+    Section.FoldButton.Rotation = Folded and -180 or 180;
+    Library:Animate(Section.FoldButton, 0.28, { Rotation = 0 });
+    Outer.ClipsDescendants = true;
+
+    if Folded then
+        Section.FoldRest = Library:FadeTree(Content, false, FOLD_TIME * 0.8, Section.UnfoldRest);
+        Section.UnfoldRest = nil;
+        Section.Animating = true;
+        Library:Animate(Outer, FOLD_TIME, { Size = UDim2.new(1, 0, 0, Section.FoldedHeight) });
+
+        task.delay(FOLD_TIME + 0.02, function()
+            if Section.FoldToken ~= Token then
+                return;
+            end;
+
+            Section.Animating = nil;
+            Section.ApplyFold();
+            Library:RestoreTree(Section.FoldRest);
+            Section.FoldRest = nil;
+            Outer.ClipsDescendants = false;
+        end);
+    else
+        local From = Outer.Size;
+        Section.ApplyFold();
+        local To = Outer.Size;
+        Outer.Size = From;
+        Section.Animating = true;
+        Library:Animate(Outer, FOLD_TIME, { Size = To });
+
+        task.delay(FOLD_TIME + 0.02, function()
+            if Section.FoldToken == Token then
+                Section.Animating = nil;
+                Section.ApplyFold(); -- picks up anything that resized meanwhile
+            end;
+        end);
+
+        -- each row fades in as the opening edge reaches it: the height eases out (Quad), so the edge passes fraction
+        -- F of the content at FOLD_TIME * (1 - sqrt(1 - F)); the whole list is in by the time the box is open
+        local Rows, Total = {}, 0;
+
+        for _, Child in next, Content:GetChildren() do
+            if Child:IsA('GuiObject') and Child.Visible then
+                table.insert(Rows, Child);
+                Total = Total + Child.Size.Y.Offset;
+            end;
+        end;
+
+        local Rest, Top = {}, 0;
+
+        for _, Child in next, Rows do
+            local Fraction = math.clamp(Top / math.max(Total, 1), 0, 1);
+            local Reached = FOLD_TIME * (1 - math.sqrt(1 - Fraction));
+            Library:FadeTree(Child, true, ROW_FADE_TIME, Rest, math.max(Reached - ROW_FADE_TIME / 2, 0));
+            Top = Top + Child.Size.Y.Offset;
+        end;
+
+        Section.UnfoldRest = Rest;
+
+        task.delay(FOLD_TIME + ROW_FADE_TIME + 0.05, function()
+            if Section.FoldToken == Token then
+                Outer.ClipsDescendants = false;
+                Section.UnfoldRest = nil;
+            end;
+        end);
+    end;
 end;
 
 function Library:DockSection(Section, Side, Order)
@@ -3962,7 +4092,7 @@ function Library:ApplyLayout(Data)
                 Library:DockSection(Section, tonumber(Entry.Side), tonumber(Entry.Order));
             end;
 
-            Library:SetSectionFolded(Section, Entry.Folded == true);
+            Library:SetSectionFolded(Section, Entry.Folded == true, true);
         end;
     end;
 end;
@@ -4046,7 +4176,7 @@ local function DragSection(Section)
 
     local Box = Section.Outer;
     local Grab = Start - Box.AbsolutePosition;
-    local From = { Floating = Section.Floating, Parent = Box.Parent, Order = Box.LayoutOrder };
+    local From = { Floating = Section.Floating, Parent = Box.Parent, Order = Box.LayoutOrder, At = Box.AbsolutePosition };
 
     if not SectionPlaceholder then
         SectionPlaceholder = Library:Create('Frame', {
@@ -4064,7 +4194,8 @@ local function DragSection(Section)
 
     SectionPlaceholder.BackgroundColor3 = Library.AccentColor;
     SectionPlaceholderStroke.Color = Library.AccentColor;
-    SectionPlaceholder.Size = UDim2.new(1, 0, 0, Box.AbsoluteSize.Y / Library.UIScale);
+    local PlaceholderHeight = Box.AbsoluteSize.Y / Library.UIScale;
+    SectionPlaceholder.Size = UDim2.new(1, 0, 0, PlaceholderHeight);
 
     if not Section.Floating then
         Section.Width = Box.AbsoluteSize.X / Library.UIScale;
@@ -4079,6 +4210,7 @@ local function DragSection(Section)
     Section.Gui.DisplayOrder = ScreenGui.DisplayOrder + 1; -- over the window while it moves
 
     local Column, Order;
+    local ShownColumn, ShownOrder;
 
     while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
         local Point = MousePoint();
@@ -4086,35 +4218,53 @@ local function DragSection(Section)
         Column, Order = SectionDropTarget(Section, Point);
 
         if Column then
-            SectionPlaceholder.LayoutOrder = Order;
-            SectionPlaceholder.Parent = Column;
+            if Column ~= ShownColumn or Order ~= ShownOrder then
+                -- a new slot: the gap opens from nothing, so the boxes around it ease aside (Library.Animations)
+                ShownColumn, ShownOrder = Column, Order;
+                SectionPlaceholder.LayoutOrder = Order;
+                SectionPlaceholder.Parent = Column;
+                SectionPlaceholder.Size = UDim2.new(1, 0, 0, Library.Animations and 0 or PlaceholderHeight);
+                Library:Animate(SectionPlaceholder, 0.15, { Size = UDim2.new(1, 0, 0, PlaceholderHeight) });
+            end;
         else
+            ShownColumn, ShownOrder = nil, nil;
             SectionPlaceholder.Parent = nil;
         end;
 
         RenderStepped:Wait();
     end;
 
-    SectionPlaceholder.Parent = nil;
-    Library.DraggingSection = nil;
-    RaiseSection(Section); -- back under the menu, on top of the other panels
+    -- glide the box onto Target (screen px) before it is put down (Library.Animations)
+    local function Snap(Target)
+        if Library.Animations and Target then
+            Library:Animate(Holder, 0.16, { Position = UDim2.fromOffset(Target.X, Target.Y) });
+            task.wait(0.17);
+        end;
+    end;
 
     local Point = MousePoint();
     local Window = Section.Tab.WindowOuter;
 
     if Column then
+        Snap(SectionPlaceholder.Parent and SectionPlaceholder.AbsolutePosition);
+        SectionPlaceholder.Parent = nil;
         Library:DockSection(Section, Column == Section.Tab.RightSide and 2 or 1, Order);
     elseif Window.Visible and PointInFrame(Window, Point) then
         -- dropped on the window but not on a column (title, tab bar): put it back
+        SectionPlaceholder.Parent = nil;
+        Snap(From.At);
         if From.Floating then
-            Library:FloatSection(Section, Point.X - Grab.X, Point.Y - Grab.Y);
+            Library:FloatSection(Section, From.At.X, From.At.Y);
         else
             Library:DockSection(Section, From.Parent == Section.Tab.RightSide and 2 or 1, From.Order);
         end;
     else
+        SectionPlaceholder.Parent = nil;
         Library:FloatSection(Section, Point.X - Grab.X, Point.Y - Grab.Y);
     end;
 
+    Library.DraggingSection = nil;
+    RaiseSection(Section); -- back under the menu, on top of the other panels
     Library:SaveLayout();
 end;
 
@@ -4190,6 +4340,77 @@ function Library:RegisterSection(Info)
 
     table.insert(Library.Sections, Section);
     return Section;
+end;
+
+-- Fading a whole tree. A CanvasGroup's GroupTransparency did nothing in this executor's CoreGui (live 2026-10-16), so
+-- like the menu fade this eases each descendant's own transparency. Rest[instance] = { property = value } is what
+-- "shown" means: filled from the current values when missing, and put back with RestoreTree once a hidden tree is
+-- out of sight, so the next fade starts from the real values.
+local function TreeFadeProperties(Instance)
+    if Instance:IsA('TextLabel') or Instance:IsA('TextButton') or Instance:IsA('TextBox') then
+        return { 'TextTransparency', 'BackgroundTransparency' };
+    elseif Instance:IsA('ImageLabel') or Instance:IsA('ImageButton') then
+        return { 'ImageTransparency', 'BackgroundTransparency' };
+    elseif Instance:IsA('Frame') or Instance:IsA('ScrollingFrame') then
+        return { 'BackgroundTransparency' };
+    elseif Instance:IsA('UIStroke') then
+        return { 'Transparency' };
+    end;
+end;
+
+-- Delay (optional): seconds before the tween starts; a tree being shown goes transparent at once and waits.
+function Library:FadeTree(Root, Visible, Time, Rest, Delay)
+    Rest = Rest or {};
+    local Info = TweenInfo.new(Time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, Delay or 0);
+
+    local List = Root:GetDescendants();
+    table.insert(List, 1, Root); -- the root as well: a label row is itself the thing to fade
+
+    for _, Desc in next, List do
+        local Properties = TreeFadeProperties(Desc);
+
+        if Properties then
+            local Saved = Rest[Desc];
+
+            if not Saved then
+                Saved = {};
+
+                for _, Property in next, Properties do
+                    Saved[Property] = Desc[Property];
+                end;
+
+                Rest[Desc] = Saved;
+            end;
+
+            local Goal = {};
+
+            for Property, Value in next, Saved do
+                if Value < 1 then
+                    if Visible then
+                        Desc[Property] = 1;
+                    end;
+
+                    Goal[Property] = Visible and Value or 1;
+                end;
+            end;
+
+            if next(Goal) then
+                TweenService:Create(Desc, Info, Goal):Play();
+            end;
+        end;
+    end;
+
+    return Rest;
+end;
+
+function Library:RestoreTree(Rest)
+    for Desc, Saved in next, Rest or {} do
+        for Property, Value in next, Saved do
+            pcall(function()
+                Desc[Property] = Value;
+            end);
+        end;
+    end;
 end;
 
 function Library:CreateWindow(...)
@@ -4332,6 +4553,7 @@ function Library:CreateWindow(...)
         BorderColor3 = Library.OutlineColor;
         Position = UDim2.new(0, 8, 0, 30);
         Size = UDim2.new(1, -16, 1, -38);
+        ClipsDescendants = true; -- tab content slides in from the sides (Tab:ShowTab)
         ZIndex = 2;
         Parent = MainSectionInner;
     });
@@ -4375,9 +4597,12 @@ function Library:CreateWindow(...)
     end;
 
     function Window:AddTab(Name)
+        Window.TabCount = (Window.TabCount or 0) + 1;
+
         local Tab = {
             Groupboxes = {};
             Tabboxes = {};
+            Index = Window.TabCount; -- left-to-right position, for the slide direction
         };
 
         local TabButtonWidth = Library:GetTextBounds(Name, Library.Font, 16);
@@ -4428,9 +4653,9 @@ function Library:CreateWindow(...)
         local TabActive = false;
 
         local function FadeTabLabel(Transparency)
-            TweenService:Create(TabButtonLabel, TabTweenInfo, { TextTransparency = Transparency }):Play();
+            Library:CreateTween(TabButtonLabel, TabTweenInfo, { TextTransparency = Transparency }):Play();
             if TabLabelStroke then
-                TweenService:Create(TabLabelStroke, TabTweenInfo, { Transparency = Transparency }):Play();
+                Library:CreateTween(TabLabelStroke, TabTweenInfo, { Transparency = Transparency }):Play();
             end;
         end;
 
@@ -4527,22 +4752,68 @@ function Library:CreateWindow(...)
             return SectionCount * 10;
         end;
 
+        -- Switching tabs (Library.Animations): the new content slides in from the side of the tab that was clicked
+        -- (a tab to the right comes in from the right) while fading in, and the old one slides out the other way
+        -- fading out. Tab.FadeRest holds the old tab's real transparencies until it is out of sight.
+        local SLIDE_PX, SLIDE_TIME = 40, 0.22;
+
         function Tab:ShowTab()
-            for _, Tab in next, Window.Tabs do
-                Tab:HideTab();
+            local Previous = Window.ActiveTab;
+            local Direction = (Previous and Previous ~= Tab) and (Tab.Index > Previous.Index and 1 or -1) or 0;
+            Window.SlideDirection = Direction;
+
+            for _, Other in next, Window.Tabs do
+                if Other ~= Tab then
+                    Other:HideTab();
+                end;
             end;
 
+            Window.ActiveTab = Tab;
             TabActive = true;
             FadeTabLabel(0);
-            TweenService:Create(TabUnderline, TabTweenInfo, { Size = UDim2.new(1, -6, 0, 2) }):Play();
+            Library:CreateTween(TabUnderline, TabTweenInfo, { Size = UDim2.new(1, -6, 0, 2) }):Play();
+
+            Tab.FadeToken = {}; -- cancels this tab's own unfinished hide
             TabFrame.Visible = true;
+
+            if Library.Animations and Direction ~= 0 then
+                TabFrame.Position = UDim2.fromOffset(Direction * SLIDE_PX, 0);
+                Library:FadeTree(TabFrame, true, SLIDE_TIME, Tab.FadeRest);
+                Library:Animate(TabFrame, SLIDE_TIME, { Position = UDim2.new() });
+            else
+                Library:RestoreTree(Tab.FadeRest);
+                TabFrame.Position = UDim2.new();
+            end;
+
+            Tab.FadeRest = nil;
         end;
 
         function Tab:HideTab()
+            local WasActive = TabActive;
             TabActive = false;
             FadeTabLabel(0.45);
-            TweenService:Create(TabUnderline, TabTweenInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
-            TabFrame.Visible = false;
+            Library:CreateTween(TabUnderline, TabTweenInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
+
+            if not (WasActive and Library.Animations and (Window.SlideDirection or 0) ~= 0) then
+                TabFrame.Visible = false;
+                return;
+            end;
+
+            local Token = {};
+            Tab.FadeToken = Token;
+            Tab.FadeRest = Library:FadeTree(TabFrame, false, SLIDE_TIME, Tab.FadeRest);
+            Library:Animate(TabFrame, SLIDE_TIME, { Position = UDim2.fromOffset(-Window.SlideDirection * SLIDE_PX, 0) });
+
+            task.delay(SLIDE_TIME + 0.02, function()
+                if Tab.FadeToken ~= Token then
+                    return; -- shown again meanwhile
+                end;
+
+                TabFrame.Visible = false;
+                TabFrame.Position = UDim2.new();
+                Library:RestoreTree(Tab.FadeRest);
+                Tab.FadeRest = nil;
+            end);
         end;
 
         function Tab:SetLayoutOrder(Position)
@@ -4631,8 +4902,16 @@ function Library:CreateWindow(...)
                 Container.Visible = not Section.Folded;
                 Groupbox:Resize();
             end;
+            Section.Content = function()
+                return Container;
+            end;
+            Section.FoldedHeight = 20 + 2 + 2;
 
             function Groupbox:Resize()
+                if Section.Animating then
+                    return; -- SetSectionFolded is easing the height and resizes once it is done
+                end;
+
                 if Section.Folded then
                     BoxOuter.Size = UDim2.new(1, 0, 0, 20 + 2 + 2);
                     return;
@@ -4748,6 +5027,10 @@ function Library:CreateWindow(...)
                     Tabbox.ActiveTab:Resize();
                 end;
             end;
+            Section.Content = function()
+                return Tabbox.ActiveTab and Tabbox.ActiveTab.Container;
+            end;
+            Section.FoldedHeight = ContentTop + 2;
 
             Library:Create('UIListLayout', {
                 FillDirection = Enum.FillDirection.Horizontal;
@@ -4819,9 +5102,9 @@ function Library:CreateWindow(...)
                 });
 
                 local function FadeLabel(Transparency)
-                    TweenService:Create(ButtonLabel, TabInfo, { TextTransparency = Transparency }):Play();
+                    Library:CreateTween(ButtonLabel, TabInfo, { TextTransparency = Transparency }):Play();
                     if ButtonLabelStroke then
-                        TweenService:Create(ButtonLabelStroke, TabInfo, { Transparency = Transparency }):Play();
+                        Library:CreateTween(ButtonLabelStroke, TabInfo, { Transparency = Transparency }):Play();
                     end;
                 end;
 
@@ -4862,7 +5145,7 @@ function Library:CreateWindow(...)
                     Container.Visible = not Section.Folded;
                     FadeLabel(0);
                     local Width = math.min(UnderlineWidth, math.max(Button.AbsoluteSize.X - 6, 0));
-                    TweenService:Create(Underline, TabInfo, { Size = UDim2.new(0, Width > 0 and Width or UnderlineWidth, 0, 2) }):Play();
+                    Library:CreateTween(Underline, TabInfo, { Size = UDim2.new(0, Width > 0 and Width or UnderlineWidth, 0, 2) }):Play();
 
                     Tab:Resize();
                 end;
@@ -4871,7 +5154,7 @@ function Library:CreateWindow(...)
                     Active = false;
                     Container.Visible = false;
                     FadeLabel(0.45);
-                    TweenService:Create(Underline, TabInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
+                    Library:CreateTween(Underline, TabInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
                 end;
 
                 function Tab:Resize()
@@ -4885,6 +5168,10 @@ function Library:CreateWindow(...)
                         if not Button:IsA('UIListLayout') then
                             Button.Size = UDim2.new(1 / TabCount, 0, 1, 0);
                         end;
+                    end;
+
+                    if Section.Animating then
+                        return; -- SetSectionFolded is easing the height and resizes once it is done
                     end;
 
                     if Section.Folded then
@@ -5072,7 +5359,7 @@ function Library:CreateWindow(...)
         ToggleGeneration = ToggleGeneration + 1;
         local Generation = ToggleGeneration;
 
-        local FadeTime = Library.MenuFadeTime or Config.MenuFadeTime;
+        local FadeTime = Library.Animations and (Library.MenuFadeTime or Config.MenuFadeTime) or 0;
         local Info = TweenInfo.new(
             FadeTime,
             Enum.EasingStyle.Quad,
@@ -5085,7 +5372,7 @@ function Library:CreateWindow(...)
         table.clear(ActiveTweens);
 
         local function Play(Instance, Goal)
-            local Tween = TweenService:Create(Instance, Info, Goal);
+            local Tween = Library:CreateTween(Instance, Info, Goal);
             table.insert(ActiveTweens, Tween);
             Tween:Play();
         end;
@@ -5470,6 +5757,7 @@ local ThemeManager = {} do
 
 		MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
 		MenuGroup:AddSlider('UIScale', { Text = 'UI scale', Default = 1, Min = 0.5, Max = 2, Rounding = 2, Suffix = 'x', HideMax = true, Tooltip = 'Size of the menu and its popups' })
+		MenuGroup:AddToggle('UIAnimations', { Text = 'Animations', Default = true, Tooltip = 'Eased fades, slides and hovers. Off: everything changes instantly', Callback = function(Value) Library.Animations = Value end })
 		MenuGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
