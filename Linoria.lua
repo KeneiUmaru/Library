@@ -117,7 +117,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 10;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 11;         -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -482,31 +482,71 @@ end;
 
 function Library:MakeDraggable(Instance, Cutoff)
     Instance.Active = true;
+    local Binding = 'LinoriaDrag_' .. game:GetService('HttpService'):GenerateGUID(false);
+    local Dragging, Moved = false, false;
+    local StartMouse, StartPosition, ParentScale;
+
+    local function GetParentScale()
+        local Scale, Parent = 1, Instance.Parent;
+        while Parent and Parent:IsA('GuiObject') do
+            local UIScale = Parent:FindFirstChildOfClass('UIScale');
+            if UIScale then Scale = Scale * UIScale.Scale; end;
+            Parent = Parent.Parent;
+        end;
+        return math.max(Scale, 0.001);
+    end;
+
+    local function Update()
+        local Point = InputService:GetMouseLocation();
+        local X, Y = (Point.X - StartMouse.X) / ParentScale, (Point.Y - StartMouse.Y) / ParentScale;
+        if X ~= 0 or Y ~= 0 then Moved = true; end;
+        -- Preserve scale coordinates and anchors; only add the cursor delta.
+        Instance.Position = UDim2.new(
+            StartPosition.X.Scale, StartPosition.X.Offset + X,
+            StartPosition.Y.Scale, StartPosition.Y.Offset + Y
+        );
+    end;
+
+    local function Stop(Save)
+        if not Dragging then return; end;
+        if Save and Instance.Parent then Update(); end;
+        Dragging = false;
+        RunService:UnbindFromRenderStep(Binding);
+        if Save and Moved then Library:AttemptSave(); end;
+    end;
+
+    local function Step()
+        if not Instance.Parent then Stop(false); return; end;
+        if not InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then Stop(true); return; end;
+        Update();
+    end;
 
     Instance.InputBegan:Connect(function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-            local ObjPos = Vector2.new(
-                Mouse.X - Instance.AbsolutePosition.X,
-                Mouse.Y - Instance.AbsolutePosition.Y
-            );
-
-            if ObjPos.Y > (Cutoff or 40) then
-                return;
-            end;
-
-            while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
-                Instance.Position = UDim2.new(
-                    0,
-                    Mouse.X - ObjPos.X + (Instance.AbsoluteSize.X * Instance.AnchorPoint.X),
-                    0,
-                    Mouse.Y - ObjPos.Y + (Instance.AbsoluteSize.Y * Instance.AnchorPoint.Y)
-                );
-
-                RenderStepped:Wait();
-            end;
-            Library:AttemptSave();
-        end;
-    end)
+        if Input.UserInputType ~= Enum.UserInputType.MouseButton1 or Dragging then return; end;
+        ParentScale = GetParentScale();
+        local OwnScale = Instance:FindFirstChildOfClass('UIScale');
+        local HeaderScale = ParentScale * (OwnScale and OwnScale.Scale or 1);
+        local HeaderY = Mouse.Y - Instance.AbsolutePosition.Y;
+        if HeaderY < 0 or HeaderY > (Cutoff or 40) * HeaderScale then return; end;
+        StartMouse, StartPosition = InputService:GetMouseLocation(), Instance.Position;
+        Dragging, Moved = true, false;
+        -- Fresh input, once per rendered frame, before camera/UI rendering. No chase tween.
+        RunService:BindToRenderStep(Binding, Enum.RenderPriority.Input.Value + 1, function()
+            Library:RunOnUIThread(Step);
+        end);
+    end);
+    local EndConnection = InputService.InputEnded:Connect(function(Input)
+        if Input.UserInputType == Enum.UserInputType.MouseButton1 then Library:RunOnUIThread(Stop, true); end;
+    end);
+    local FocusConnection = InputService.WindowFocusReleased:Connect(function() Library:RunOnUIThread(Stop, true); end);
+    Library:GiveSignal(EndConnection);
+    Library:GiveSignal(FocusConnection);
+    Instance.Destroying:Connect(function()
+        Stop(false);
+        EndConnection:Disconnect();
+        FocusConnection:Disconnect();
+    end);
+    Library:GiveSignal({ Disconnect = function() Stop(false); end });
 end;
 
 function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
@@ -2326,10 +2366,18 @@ do
             Library:AttemptSave();
         end;
 
-        if Textbox.Finished then
-            Box.FocusLost:Connect(function(enter)
-                if not enter then return end
+        -- Flush a draft synchronously before actions that consume an input (e.g. saving a preset).
+        function Textbox:Commit()
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Textbox.Commit, Textbox);
+            end;
+            Textbox:SetValue(Box.Text);
+            return Textbox.Value;
+        end;
 
+        if Textbox.Finished then
+            -- Finished inputs commit on Enter and when clicking elsewhere.
+            Box.FocusLost:Connect(function()
                 Textbox:SetValue(Box.Text);
                 Library:AttemptSave();
             end)
