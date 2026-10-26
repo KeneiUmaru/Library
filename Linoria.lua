@@ -2982,6 +2982,54 @@ do
         local Groupbox = self;
         local Container = Groupbox.Container;
 
+        -- Clip long text to its own viewport, then reveal the tail on hover/selection.
+        -- One cancellable tween per label; no polling or delayed task survives a rebuild.
+        local function AddTextScroll(Label, Clip, HoverTarget, ScrollOnChange)
+            local Controller = { Wanted = false, Tween = nil };
+
+            function Controller:Stop()
+                if self.Tween then
+                    self.Tween:Cancel();
+                    self.Tween = nil;
+                end;
+                Label.Position = UDim2.fromOffset(0, 0);
+            end;
+
+            function Controller:Refresh()
+                self:Stop();
+                local Scale = Library.UIScale or 1;
+                local Width = Clip.AbsoluteSize.X / Scale;
+                if Width <= 0 then return end;
+                local TextWidth = Library:GetTextBounds(Label.Text, Label.Font, Label.TextSize, Vector2.new(100000, 100000));
+                local Overflow = math.max(0, math.ceil(TextWidth) - Width);
+                Label.Size = UDim2.new(0, math.max(Width, math.ceil(TextWidth)), 1, 0);
+                if not self.Wanted or Overflow <= 0 or not Library.Animations then return end;
+                self.Tween = Library:CreateTween(Label,
+                    TweenInfo.new(math.clamp(Overflow / 35, 0.6, 8), Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, false, 0.35),
+                    { Position = UDim2.fromOffset(-Overflow, 0) });
+                self.Tween:Play();
+            end;
+
+            HoverTarget.MouseEnter:Connect(function()
+                Controller.Wanted = true;
+                Controller:Refresh();
+            end);
+            HoverTarget.MouseLeave:Connect(function()
+                Controller.Wanted = false;
+                Controller:Stop();
+            end);
+            Label:GetPropertyChangedSignal('Text'):Connect(function()
+                Controller.Wanted = ScrollOnChange or Controller.Wanted;
+                Controller:Refresh();
+            end);
+            Label:GetPropertyChangedSignal('TextSize'):Connect(function() Controller:Refresh(); end);
+            Label:GetPropertyChangedSignal('Font'):Connect(function() Controller:Refresh(); end);
+            Clip:GetPropertyChangedSignal('AbsoluteSize'):Connect(function() Controller:Refresh(); end);
+            Clip.Destroying:Connect(function() Controller:Stop(); end);
+            Controller:Refresh();
+            return Controller;
+        end;
+
         local RelativeOffset = 0;
 
         if not Info.Compact then
@@ -3049,16 +3097,27 @@ do
             Parent = DropdownInner;
         });
 
-        local ItemList = Library:CreateLabel({
+        local ItemClip = Library:Create('Frame', {
+            BackgroundTransparency = 1;
+            BorderSizePixel = 0;
+            ClipsDescendants = true;
             Position = UDim2.new(0, 5, 0, 0);
-            Size = UDim2.new(1, -5, 1, 0);
-            TextSize = 14;
-            Text = '--';
-            TextXAlignment = Enum.TextXAlignment.Left;
-            TextWrapped = true;
+            Size = UDim2.new(1, -25, 1, 0);
             ZIndex = 7;
             Parent = DropdownInner;
         });
+
+        local ItemList = Library:CreateLabel({
+            Position = UDim2.fromOffset(0, 0);
+            Size = UDim2.new(1, 0, 1, 0);
+            TextSize = 14;
+            Text = '--';
+            TextXAlignment = Enum.TextXAlignment.Left;
+            TextWrapped = false;
+            ZIndex = 7;
+            Parent = ItemClip;
+        });
+        AddTextScroll(ItemList, ItemClip, DropdownOuter, true);
 
         Library:OnHighlight(DropdownOuter, DropdownOuter,
             { BorderColor3 = 'AccentColor' },
@@ -3095,6 +3154,16 @@ do
         DropdownOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(RecalculateListPosition);
 
         Library:RegisterPopup(ListOuter);
+
+        local ListTextScrollers = {};
+        ListOuter:GetPropertyChangedSignal('Visible'):Connect(function()
+            if not ListOuter.Visible then
+                for _, Scroller in ipairs(ListTextScrollers) do
+                    Scroller.Wanted = false;
+                    Scroller:Stop();
+                end;
+            end;
+        end);
 
         local ListInner = Library:Create('Frame', {
             BackgroundColor3 = Library.MainColor;
@@ -3173,6 +3242,8 @@ do
         function Dropdown:BuildDropdownList()
             local Values = Dropdown.Values;
             local Buttons = {};
+            for _, Scroller in ipairs(ListTextScrollers) do Scroller:Stop(); end;
+            table.clear(ListTextScrollers);
 
             for _, Element in next, Scrolling:GetChildren() do
                 if not Element:IsA('UIListLayout') then
@@ -3202,16 +3273,28 @@ do
                     BorderColor3 = 'OutlineColor';
                 });
 
-                local ButtonLabel = Library:CreateLabel({
-                    Active = false;
-                    Size = UDim2.new(1, -6, 1, 0);
+                local ButtonClip = Library:Create('Frame', {
+                    BackgroundTransparency = 1;
+                    BorderSizePixel = 0;
+                    ClipsDescendants = true;
                     Position = UDim2.new(0, 6, 0, 0);
-                    TextSize = 14;
-                    Text = Value;
-                    TextXAlignment = Enum.TextXAlignment.Left;
+                    Size = UDim2.new(1, -12, 1, 0);
                     ZIndex = 25;
                     Parent = Button;
                 });
+
+                local ButtonLabel = Library:CreateLabel({
+                    Active = false;
+                    Size = UDim2.new(1, 0, 1, 0);
+                    Position = UDim2.fromOffset(0, 0);
+                    TextSize = 14;
+                    Text = Value;
+                    TextXAlignment = Enum.TextXAlignment.Left;
+                    TextWrapped = false;
+                    ZIndex = 25;
+                    Parent = ButtonClip;
+                });
+                table.insert(ListTextScrollers, AddTextScroll(ButtonLabel, ButtonClip, Button, false));
 
                 Library:OnHighlight(Button, Button,
                     { BorderColor3 = 'AccentColor', ZIndex = 24 },
