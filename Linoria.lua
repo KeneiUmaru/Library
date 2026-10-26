@@ -17,6 +17,7 @@
         Library:SetElementGlow(on, transparency)  -- glow under toggles, slider fills and color swatches
         Library:AddGlow(parent, size, zindex, colorKey) -- add your own glow to any frame
         Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Suffix, Format }) -- read-only thin bar, update with :SetValue(n)
+        Groupbox:AddButton({ Text, Func, DoubleClick = true, ConfirmationTime = 3 }) -- second click confirms; otherwise resets
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Sections (every groupbox / tabbox)        -- -/+ folds it; drag its title to move it (accent box = where it
@@ -114,7 +115,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 8;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 9;          -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -501,6 +502,7 @@ function Library:MakeDraggable(Instance, Cutoff)
 
                 RenderStepped:Wait();
             end;
+            Library:AttemptSave();
         end;
     end)
 end;
@@ -1348,6 +1350,7 @@ do
 
             Library:SafeCallback(ColorPicker.Callback, ColorPicker.Value);
             Library:SafeCallback(ColorPicker.Changed, ColorPicker.Value);
+            Library:AttemptSave();
         end;
 
         function ColorPicker:OnChanged(Func)
@@ -1706,6 +1709,7 @@ do
             KeyPicker.Value = Key;
             ModeButtons[Mode]:Select();
             KeyPicker:Update();
+            Library:AttemptSave();
         end;
 
         function KeyPicker:OnClick(Callback)
@@ -1923,6 +1927,7 @@ do
                 Obj.Text = Props.Text
                 Obj.Func = Props.Func
                 Obj.DoubleClick = Props.DoubleClick
+                Obj.ConfirmationTime = tonumber(Props.ConfirmationTime) or 0.5
                 Obj.Tooltip = Props.Tooltip
             else
                 Obj.Text = select(1, ...)
@@ -1991,15 +1996,15 @@ do
         local function InitEvents(Button)
             local function WaitForEvent(event, timeout, validator)
                 local bindable = Instance.new('BindableEvent')
+                local resolved = false
                 local connection = event:Once(function(...)
-
-                    if type(validator) == 'function' and validator(...) then
-                        bindable:Fire(true)
-                    else
-                        bindable:Fire(false)
-                    end
+                    if resolved then return end
+                    resolved = true
+                    bindable:Fire(type(validator) == 'function' and validator(...) or false)
                 end)
                 task.delay(timeout, function()
+                    if resolved then return end
+                    resolved = true
                     connection:disconnect()
                     bindable:Fire(false)
                 end)
@@ -2038,7 +2043,7 @@ do
                     Button.Label.Text = 'Are you sure?'
                     Button.Locked = true
 
-                    local clicked = WaitForEvent(Button.Outer.InputBegan, 0.5, ValidateClick)
+                    local clicked = WaitForEvent(Button.Outer.InputBegan, math.clamp(Button.ConfirmationTime or 0.5, 0.1, 10), ValidateClick)
 
                     Library:RemoveFromRegistry(Button.Label)
                     Library:AddToRegistry(Button.Label, { TextColor3 = 'FontColor' })
@@ -2269,6 +2274,7 @@ do
 
             Library:SafeCallback(Textbox.Callback, Textbox.Value);
             Library:SafeCallback(Textbox.Changed, Textbox.Value);
+            Library:AttemptSave();
         end;
 
         if Textbox.Finished then
@@ -2514,6 +2520,7 @@ do
             Library:SafeCallback(Toggle.Callback, Toggle.Value);
             Library:SafeCallback(Toggle.Changed, Toggle.Value);
             Library:UpdateDependencyBoxes();
+            Library:AttemptSave();
         end;
 
         ToggleRegion.InputBegan:Connect(function(Input)
@@ -2710,6 +2717,7 @@ do
 
             Library:SafeCallback(Slider.Callback, Slider.Value);
             Library:SafeCallback(Slider.Changed, Slider.Value);
+            Library:AttemptSave();
         end;
 
         SliderInner.InputBegan:Connect(function(Input)
@@ -3494,6 +3502,7 @@ do
 
             Library:SafeCallback(Dropdown.Callback, Dropdown.Value);
             Library:SafeCallback(Dropdown.Changed, Dropdown.Value);
+            Library:AttemptSave();
         end;
 
         DropdownOuter.InputBegan:Connect(function(Input)
