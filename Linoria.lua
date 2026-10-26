@@ -18,6 +18,8 @@
         Library:AddGlow(parent, size, zindex, colorKey) -- add your own glow to any frame
         Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Suffix, Format }) -- read-only thin bar, update with :SetValue(n)
         Groupbox:AddButton({ Text, Func, DoubleClick = true, ConfirmationTime = 3 }) -- second click confirms; otherwise resets
+        Groupbox:AddLabel(text, wrap?, tooltip?)  -- compact help labels; :AddTooltip(text) also works
+        Dropdown ValueTooltips = { [value] = description } -- or function(value); describes hovered options and selection
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Sections (every groupbox / tabbox)        -- -/+ folds it; drag its title to move it (accent box = where it
@@ -115,7 +117,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 9;          -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 10;         -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -507,9 +509,9 @@ function Library:MakeDraggable(Instance, Cutoff)
     end)
 end;
 
-function Library:AddToolTip(InfoStr, HoverInstance)
+function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
     -- Long tooltips wrap at 300 px instead of running off the edge of the screen.
-    local X, Y = Library:GetTextBounds(InfoStr, Library.Font, 14, Vector2.new(300, math.huge));
+    local X, Y = 1, 1;
     local Tooltip = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor,
         BorderColor3 = Library.OutlineColor,
@@ -525,7 +527,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
         Position = UDim2.fromOffset(3, 1),
         Size = UDim2.fromOffset(X, Y);
         TextSize = 14;
-        Text = InfoStr,
+        Text = '',
         TextColor3 = Library.FontColor,
         TextWrapped = true;
         TextXAlignment = Enum.TextXAlignment.Left;
@@ -544,6 +546,34 @@ function Library:AddToolTip(InfoStr, HoverInstance)
     });
 
     local IsHovering = false
+    local LastText
+
+    local function UpdateText()
+        local Text = InfoStr
+        if type(Text) == 'function' then
+            local Ok, Result = pcall(Text)
+            Text = Ok and Result or nil
+        end
+        if type(Text) ~= 'string' or Text == '' then return false end
+        if Text ~= LastText then
+            LastText = Text
+            local Width, Height = Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(300, math.huge))
+            Tooltip.Size = UDim2.fromOffset(Width + 8, Height + 6)
+            Label.Size = UDim2.fromOffset(Width, Height)
+            Label.Text = Text
+        end
+        return true
+    end
+
+    local function IsShown()
+        local Object = HoverInstance
+        while Object do
+            if Object:IsA('GuiObject') and not Object.Visible then return false end
+            if Object:IsA('ScreenGui') and not Object.Enabled then return false end
+            Object = Object.Parent
+        end
+        return HoverInstance.Parent ~= nil
+    end
 
     -- Right of and below the cursor by default; flipped to the other side of the cursor when that would run
     -- past the screen edge, then clamped so it is always fully on screen.
@@ -566,7 +596,7 @@ function Library:AddToolTip(InfoStr, HoverInstance)
     end;
 
     HoverInstance.MouseEnter:Connect(function()
-        if Library:MouseIsOverOpenedFrame() then
+        if not AllowOpenedFrame and Library:MouseIsOverOpenedFrame() then
             return
         end
 
@@ -575,16 +605,21 @@ function Library:AddToolTip(InfoStr, HoverInstance)
         PlaceTooltip()
         Tooltip.Visible = true
 
-        while IsHovering do
-            RunService.Heartbeat:Wait()
+        while IsHovering and Tooltip.Parent and IsShown() do
+            Tooltip.Visible = UpdateText()
+            if not Library:IsMouseOverFrame(HoverInstance) then break end
             PlaceTooltip()
+            RunService.Heartbeat:Wait()
         end
+        IsHovering = false
+        if Tooltip.Parent then Tooltip.Visible = false end
     end)
 
     HoverInstance.MouseLeave:Connect(function()
         IsHovering = false
         Tooltip.Visible = false
     end)
+    return Tooltip
 end
 
 function Library:OnHighlight(HighlightInstance, Instance, Properties, PropertiesDefault)
@@ -886,6 +921,7 @@ do
     local Funcs = {};
 
     function Funcs:AddColorPicker(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
         local ToggleLabel = self.TextLabel;
         -- local Container = self.Container;
 
@@ -1494,6 +1530,7 @@ do
         end))
 
         ColorPicker:Display();
+        if Info.Tooltip then Library:AddToolTip(Info.Tooltip, DisplayFrame); end;
         ColorPicker.DisplayFrame = DisplayFrame
 
         Options[Idx] = ColorPicker;
@@ -1502,6 +1539,7 @@ do
     end;
 
     function Funcs:AddKeyPicker(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
         local ParentObj = self;
         local ToggleLabel = self.TextLabel;
         local Container = self.Container;
@@ -1834,6 +1872,7 @@ do
         KeyPicker:Update();
 
         Options[Idx] = KeyPicker;
+        if Info.Tooltip then Library:AddToolTip(Info.Tooltip, PickOuter); end;
 
         return self;
     end;
@@ -1861,7 +1900,7 @@ do
         });
     end;
 
-    function Funcs:AddLabel(Text, DoesWrap)
+    function Funcs:AddLabel(Text, DoesWrap, Tooltip)
         local Label = {};
 
         local Groupbox = self;
@@ -1892,6 +1931,11 @@ do
 
         Label.TextLabel = TextLabel;
         Label.Container = Container;
+        function Label:AddTooltip(Text)
+            Library:AddToolTip(Text, TextLabel);
+            return self;
+        end;
+        if Tooltip then Label:AddTooltip(Tooltip); end;
 
         function Label:SetText(Text)
             if Library:NeedsUIThread() then
@@ -1935,6 +1979,7 @@ do
             end
 
             assert(type(Obj.Func) == 'function', 'AddButton: `Func` callback is missing.');
+            Obj.Tooltip = Obj.Tooltip or (Library.ButtonTooltips and Library.ButtonTooltips[Obj.Text]);
         end
 
         ProcessButtonParams('Button', Button, ...)
@@ -2157,6 +2202,7 @@ do
     end
 
     function Funcs:AddInput(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
         assert(Info.Text, 'AddInput: Missing `Text` string.')
 
         local Textbox = {
@@ -2347,6 +2393,7 @@ do
     end;
 
     function Funcs:AddToggle(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
         assert(Info.Text, 'AddInput: Missing `Text` string.')
 
         local Toggle = {
@@ -2552,6 +2599,7 @@ do
     end;
 
     function Funcs:AddSlider(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
         assert(Info.Default, 'AddSlider: Missing default value.');
         assert(Info.Text, 'AddSlider: Missing slider text.');
         assert(Info.Min, 'AddSlider: Missing minimum value.');
@@ -2775,6 +2823,7 @@ do
     --   Groupbox:AddProgressBar('Level', { Text = 'Level progress', Default = 40, Min = 0, Max = 100 })
     --   Info.Format(Value, Min, Max) -> string customises the readout; otherwise Info.Suffix or a percentage.
     function Funcs:AddProgressBar(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
         assert(Info.Text, 'AddProgressBar: Missing `Text` string.');
 
         local ProgressBar = {
@@ -2963,6 +3012,8 @@ do
     end;
 
     function Funcs:AddDropdown(Idx, Info)
+        Info.Tooltip = Info.Tooltip or (Library.Tooltips and Library.Tooltips[Idx]);
+        Info.ValueTooltips = Info.ValueTooltips or (Library.DropdownDescriptions and Library.DropdownDescriptions[Idx]);
         if Info.SpecialType == 'Player' then
             Info.Values = GetPlayersString();
             Info.AllowNull = true;
@@ -2986,6 +3037,14 @@ do
             SpecialType = Info.SpecialType; -- can be either 'Player' or 'Team'
             Callback = Info.Callback or function(Value) end;
         };
+        function Dropdown:GetValueTooltip(Value)
+            local Descriptions = Info.ValueTooltips;
+            if type(Descriptions) == 'function' then
+                local Ok, Text = pcall(Descriptions, Value);
+                return Ok and type(Text) == 'string' and Text or nil;
+            end;
+            return type(Descriptions) == 'table' and Descriptions[Value] or nil;
+        end;
 
         local Groupbox = self;
         local Container = Groupbox.Container;
@@ -3190,8 +3249,12 @@ do
             { BorderColor3 = 'Black' }
         );
 
-        if type(Info.Tooltip) == 'string' then
-            Library:AddToolTip(Info.Tooltip, DropdownOuter)
+        if Info.Tooltip or Info.ValueTooltips then
+            Library:AddToolTip(function()
+                local Text = Info.Tooltip or '';
+                local Selected = not Dropdown.Multi and Dropdown:GetValueTooltip(Dropdown.Value);
+                return Selected and (Text ~= '' and Text .. '\n\n' .. Selected or Selected) or Text;
+            end, DropdownOuter)
         end
 
         local MAX_DROPDOWN_ITEMS = 8;
@@ -3350,6 +3413,11 @@ do
                 Row.Label = ButtonLabel;
                 Row.Scroller = AddTextScroll(ButtonLabel, ButtonClip, Button, false);
                 table.insert(ListTextScrollers, Row.Scroller);
+                if Info.ValueTooltips then
+                    Library:AddToolTip(function()
+                        return ListOuter.Visible and Row.Value ~= nil and Dropdown:GetValueTooltip(Row.Value) or nil;
+                    end, Button, true);
+                end;
 
                 Library:OnHighlight(Button, Button,
                     { BorderColor3 = 'AccentColor', ZIndex = 24 },
