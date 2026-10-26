@@ -3290,8 +3290,7 @@ do
             end;
         end;
 
-        -- Pool the visible rows instead of creating a GUI tree for every value.
-        -- Lists stay cheap to construct, scroll, select, and replace even with thousands of entries.
+        -- Reuse only the visible rows; opening a large list must not build thousands of instances.
         local Rows = {};
         local FirstRendered;
         function Dropdown:RenderRows(Force)
@@ -3301,7 +3300,6 @@ do
             if not Force and FirstRendered == First then return end;
             FirstRendered = First;
             local Count = math.min(#Dropdown.Values, MAX_DROPDOWN_ITEMS + 2);
-
             for Index = #Rows + 1, Count do
                 local Row = {};
                 local Button = Library:Create('Frame', {
@@ -3400,7 +3398,6 @@ do
 
                 Rows[Index] = Row;
             end;
-
             for Index, Row in ipairs(Rows) do
                 local ValueIndex = First + Index - 1;
                 local Value = Dropdown.Values[ValueIndex];
@@ -3430,6 +3427,9 @@ do
 
         Scrolling:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
             Dropdown:RenderRows();
+        end);
+        Scrolling:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+            Dropdown:RenderRows(true);
         end);
 
         function Dropdown:SetValues(NewValues)
