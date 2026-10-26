@@ -3257,13 +3257,6 @@ do
             ScrollBarImageColor3 = 'AccentColor'
         })
 
-        Library:Create('UIListLayout', {
-            Padding = UDim.new(0, 0);
-            FillDirection = Enum.FillDirection.Vertical;
-            SortOrder = Enum.SortOrder.LayoutOrder;
-            Parent = Scrolling;
-        });
-
         function Dropdown:Display()
             local Values = Dropdown.Values;
             local Str = '';
@@ -3297,25 +3290,20 @@ do
             end;
         end;
 
-        function Dropdown:BuildDropdownList()
-            local Values = Dropdown.Values;
-            local Buttons = {};
-            for _, Scroller in ipairs(ListTextScrollers) do Scroller:Stop(); end;
-            table.clear(ListTextScrollers);
+        -- Pool the visible rows instead of creating a GUI tree for every value.
+        -- Lists stay cheap to construct, scroll, select, and replace even with thousands of entries.
+        local Rows = {};
+        local FirstRendered;
+        function Dropdown:RenderRows(Force)
+            if not ListOuter.Visible then return end;
+            local Scale = math.max(Library.UIScale or 1, 0.01);
+            local First = math.max(1, math.floor(Scrolling.CanvasPosition.Y / Scale / 20) + 1);
+            if not Force and FirstRendered == First then return end;
+            FirstRendered = First;
+            local Count = math.min(#Dropdown.Values, MAX_DROPDOWN_ITEMS + 2);
 
-            for _, Element in next, Scrolling:GetChildren() do
-                if not Element:IsA('UIListLayout') then
-                    Element:Destroy();
-                end;
-            end;
-
-            local Count = 0;
-
-            for Idx, Value in next, Values do
-                local Table = {};
-
-                Count = Count + 1;
-
+            for Index = #Rows + 1, Count do
+                local Row = {};
                 local Button = Library:Create('Frame', {
                     BackgroundColor3 = Library.MainColor;
                     BorderColor3 = Library.OutlineColor;
@@ -3325,6 +3313,7 @@ do
                     Active = true,
                     Parent = Scrolling;
                 });
+                Row.Button = Button;
 
                 Library:AddToRegistry(Button, {
                     BackgroundColor3 = 'MainColor';
@@ -3346,40 +3335,32 @@ do
                     Size = UDim2.new(1, 0, 1, 0);
                     Position = UDim2.fromOffset(0, 0);
                     TextSize = 14;
-                    Text = Value;
+                    Text = '';
                     TextXAlignment = Enum.TextXAlignment.Left;
                     TextWrapped = false;
                     ZIndex = 25;
                     Parent = ButtonClip;
                 });
-                table.insert(ListTextScrollers, AddTextScroll(ButtonLabel, ButtonClip, Button, false));
+                Row.Label = ButtonLabel;
+                Row.Scroller = AddTextScroll(ButtonLabel, ButtonClip, Button, false);
+                table.insert(ListTextScrollers, Row.Scroller);
 
                 Library:OnHighlight(Button, Button,
                     { BorderColor3 = 'AccentColor', ZIndex = 24 },
                     { BorderColor3 = 'OutlineColor', ZIndex = 23 }
                 );
 
-                local Selected;
-
-                if Info.Multi then
-                    Selected = Dropdown.Value[Value];
-                else
-                    Selected = Dropdown.Value == Value;
-                end;
-
-                function Table:UpdateButton()
-                    if Info.Multi then
-                        Selected = Dropdown.Value[Value];
-                    else
-                        Selected = Dropdown.Value == Value;
-                    end;
-
+                function Row:UpdateButton()
+                    local Selected = Info.Multi and Dropdown.Value[self.Value] or Dropdown.Value == self.Value;
                     ButtonLabel.TextColor3 = Selected and Library.AccentColor or Library.FontColor;
                     Library.RegistryMap[ButtonLabel].Properties.TextColor3 = Selected and 'AccentColor' or 'FontColor';
                 end;
 
                 ButtonLabel.InputBegan:Connect(function(Input)
                     if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        local Value = Row.Value;
+                        if Value == nil then return end;
+                        local Selected = Info.Multi and Dropdown.Value[Value] or Dropdown.Value == Value;
                         local Try = not Selected;
 
                         if Dropdown:GetActiveValues() == 1 and (not Try) and (not Info.AllowNull) then
@@ -3401,12 +3382,12 @@ do
                                     Dropdown.Value = nil;
                                 end;
 
-                                for _, OtherButton in next, Buttons do
+                                for _, OtherButton in ipairs(Rows) do
                                     OtherButton:UpdateButton();
                                 end;
                             end;
 
-                            Table:UpdateButton();
+                            Row:UpdateButton();
                             Dropdown:Display();
 
                             Library:SafeCallback(Dropdown.Callback, Dropdown.Value);
@@ -3417,17 +3398,39 @@ do
                     end;
                 end);
 
-                Table:UpdateButton();
-                Dropdown:Display();
-
-                Buttons[Button] = Table;
+                Rows[Index] = Row;
             end;
 
-            Scrolling.CanvasSize = UDim2.fromOffset(0, (Count * 20) + 1);
+            for Index, Row in ipairs(Rows) do
+                local ValueIndex = First + Index - 1;
+                local Value = Dropdown.Values[ValueIndex];
+                Row.Button.Visible = Value ~= nil;
+                if Row.Value ~= Value then
+                    Row.Scroller:Stop();
+                    Row.Value = Value;
+                    Row.Label.Text = Value or '';
+                end;
+                Row.Button.Position = UDim2.fromOffset(0, (ValueIndex - 1) * 20);
+                if Value == nil then
+                    Row.Scroller.Wanted = false;
+                    Row.Scroller:Stop();
+                end;
+                Row:UpdateButton();
+            end;
+        end;
 
+        function Dropdown:BuildDropdownList()
+            local Count = #Dropdown.Values;
+            Scrolling.CanvasSize = UDim2.fromOffset(0, (Count * 20) + 1);
             local Y = math.clamp(Count * 20, 0, MAX_DROPDOWN_ITEMS * 20) + 1;
             RecalculateListSize(Y);
+            Dropdown:Display();
+            Dropdown:RenderRows(true);
         end;
+
+        Scrolling:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
+            Dropdown:RenderRows();
+        end);
 
         function Dropdown:SetValues(NewValues)
             if Library:NeedsUIThread() then
@@ -3444,6 +3447,7 @@ do
         function Dropdown:OpenDropdown()
             RecalculateListPosition();
             ListOuter.Visible = true;
+            Dropdown:RenderRows(true);
             Library.OpenedFrames[ListOuter] = true;
             -- the list's contents drop in a few px and the arrow turns (Library.Animations)
             ListInner.Position = UDim2.fromOffset(0, Library.Animations and -6 or 0);
@@ -3485,7 +3489,8 @@ do
                 end;
             end;
 
-            Dropdown:BuildDropdownList();
+            Dropdown:Display();
+            Dropdown:RenderRows(true);
 
             Library:SafeCallback(Dropdown.Callback, Dropdown.Value);
             Library:SafeCallback(Dropdown.Changed, Dropdown.Value);
