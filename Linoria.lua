@@ -513,6 +513,7 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
     -- Long tooltips wrap at 300 px instead of running off the edge of the screen.
     local X, Y = 1, 1;
     local Tooltip = Library:Create('Frame', {
+        Name = 'Tooltip',
         BackgroundColor3 = Library.MainColor,
         BorderColor3 = Library.OutlineColor,
 
@@ -546,6 +547,7 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
     });
 
     local IsHovering = false
+    local HoverSerial = 0
     local LastText
 
     local function UpdateText()
@@ -601,21 +603,22 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
         end
 
         IsHovering = true
-
-        PlaceTooltip()
-        Tooltip.Visible = true
-
-        while IsHovering and Tooltip.Parent and IsShown() do
+        HoverSerial = HoverSerial + 1
+        local Serial = HoverSerial
+        while IsHovering and HoverSerial == Serial and Tooltip.Parent and IsShown() do
             Tooltip.Visible = UpdateText()
             if not Library:IsMouseOverFrame(HoverInstance) then break end
             PlaceTooltip()
             RunService.Heartbeat:Wait()
         end
-        IsHovering = false
-        if Tooltip.Parent then Tooltip.Visible = false end
+        if HoverSerial == Serial then
+            IsHovering = false
+            if Tooltip.Parent then Tooltip.Visible = false end
+        end
     end)
 
     HoverInstance.MouseLeave:Connect(function()
+        HoverSerial = HoverSerial + 1
         IsHovering = false
         Tooltip.Visible = false
     end)
@@ -3038,12 +3041,15 @@ do
             Callback = Info.Callback or function(Value) end;
         };
         function Dropdown:GetValueTooltip(Value)
+            if Value == nil then return nil end;
             local Descriptions = Info.ValueTooltips;
             if type(Descriptions) == 'function' then
                 local Ok, Text = pcall(Descriptions, Value);
-                return Ok and type(Text) == 'string' and Text or nil;
+                if Ok and type(Text) == 'string' and Text ~= '' then return Text end;
+            elseif type(Descriptions) == 'table' and type(Descriptions[Value]) == 'string' then
+                return Descriptions[Value];
             end;
-            return type(Descriptions) == 'table' and Descriptions[Value] or nil;
+            return tostring(Value);
         end;
 
         local Groupbox = self;
@@ -3252,7 +3258,7 @@ do
         if Info.Tooltip or Info.ValueTooltips then
             Library:AddToolTip(function()
                 local Text = Info.Tooltip or '';
-                local Selected = not Dropdown.Multi and Dropdown:GetValueTooltip(Dropdown.Value);
+                local Selected = Info.ValueTooltips and not Dropdown.Multi and Dropdown:GetValueTooltip(Dropdown.Value);
                 return Selected and (Text ~= '' and Text .. '\n\n' .. Selected or Selected) or Text;
             end, DropdownOuter)
         end
@@ -3413,11 +3419,9 @@ do
                 Row.Label = ButtonLabel;
                 Row.Scroller = AddTextScroll(ButtonLabel, ButtonClip, Button, false);
                 table.insert(ListTextScrollers, Row.Scroller);
-                if Info.ValueTooltips then
-                    Library:AddToolTip(function()
-                        return ListOuter.Visible and Row.Value ~= nil and Dropdown:GetValueTooltip(Row.Value) or nil;
-                    end, Button, true);
-                end;
+                Library:AddToolTip(function()
+                    return ListOuter.Visible and Row.Value ~= nil and Dropdown:GetValueTooltip(Row.Value) or nil;
+                end, Button, true);
 
                 Library:OnHighlight(Button, Button,
                     { BorderColor3 = 'AccentColor', ZIndex = 24 },
