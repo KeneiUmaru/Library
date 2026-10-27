@@ -5013,9 +5013,16 @@ function Library:CreateWindow(...)
         });
 
         for _, Side in next, { LeftSide, RightSide } do
-            Side:WaitForChild('UIListLayout'):GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
-                Side.CanvasSize = UDim2.fromOffset(0, Side.UIListLayout.AbsoluteContentSize.Y);
-            end);
+            local Layout = Side:WaitForChild('UIListLayout');
+            local function UpdateCanvas()
+                -- Layout bounds are screen pixels; CanvasSize offsets are unscaled UI pixels.
+                local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
+                local Scale = math.max(ScaleObject and ScaleObject.Scale or Library.UIScale or 1, 0.01);
+                Side.CanvasSize = UDim2.fromOffset(0, math.ceil(Layout.AbsoluteContentSize.Y / Scale) + 8);
+            end;
+            Layout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(UpdateCanvas);
+            Side:GetPropertyChangedSignal('AbsoluteSize'):Connect(UpdateCanvas);
+            task.defer(UpdateCanvas);
         end;
 
         -- what a section needs to find its way back (see Library:RegisterSection)
