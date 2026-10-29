@@ -13,6 +13,8 @@
         Library:SetRainbowAccent(on, gradient?)   -- hue-cycling accent, optionally spread down the window
         Library:SetKeybindFrameVisibility(on)     -- keybind HUD, auto-hidden while it has no entries
         Library:SetScale(n)                       -- scale the window and its popups (0.5 - 2)
+        Library:SetCursor(source, size?)          -- custom menu cursor: image URL (getcustomasset), file path, .cur or rbxassetid;
+                                                  -- '' restores the triangle (Settings > Menu > Custom cursor)
         Library:SetGlow(on, size, transparency)   -- accent glow around the window
         Library:SetElementGlow(on, transparency)  -- glow under toggles, slider fills and color swatches
         Library:AddGlow(parent, size, zindex, colorKey) -- add your own glow to any frame
@@ -148,7 +150,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 12;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 13;         -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -1050,6 +1052,104 @@ function Library:SetScale(Scale)
     end;
 end;
 
+-- Custom menu cursor (replaces the drawn triangle while the menu is open).
+--   Source: an image URL (downloaded once to LinoriaCursors/ and loaded with getcustomasset), a workspace file path,
+--   a Windows .cur file or link (its PNG and hotspot are used), or an rbxassetid:// id. '' goes back to the triangle; nil keeps the current image (to change only the size).
+--   Size: px, square. The image's top-left corner is the hotspot.
+-- shortcut: a URL is cached by name, so an image changed at the same URL needs its LinoriaCursors file deleted.
+local GetCustomAsset = getcustomasset or getsynasset;
+
+-- Windows .cur cursors (Vista and later) store PNG images inside. Returns the largest one and its hotspot (the
+-- click point) as a fraction of the image size.
+local function CurToPng(Data)
+    local Best;
+
+    for Index = 0, string.unpack('<I2', Data, 5) - 1 do
+        local W, H, _, _, HX, HY, Size, Offset = string.unpack('<BBBBI2I2I4I4', Data, 7 + Index * 16);
+        W, H = (W == 0 and 256 or W), (H == 0 and 256 or H);
+
+        if Data:sub(Offset + 1, Offset + 4) == '\137PNG' and (not Best or W > Best.W) then
+            Best = { W = W, Png = Data:sub(Offset + 1, Offset + Size), Hot = Vector2.new(HX / W, HY / H) };
+        end;
+    end;
+
+    assert(Best, 'no PNG image in this .cur (old BMP-only cursors are not supported)');
+    return Best.Png, Best.Hot;
+end;
+
+function Library:SetCursor(Source, Size)
+    if Library:NeedsUIThread() then
+        return Library:RunOnUIThread(Library.SetCursor, Library, Source, Size);
+    end;
+
+    Library.CursorSize = tonumber(Size) or Library.CursorSize or 24;
+
+    if Source ~= nil then
+        Source = tostring(Source):match('^%s*(.-)%s*$');
+        local Ok, Asset, Hotspot = pcall(function()
+            if Source == '' then
+                return nil;
+            elseif Source:find('^rbxasset') or Source:find('^rbxthumb') then
+                return Source;
+            end;
+
+            assert(GetCustomAsset, 'this executor has no getcustomasset');
+            local Path = Source;
+
+            if Source:find('^https?://') then
+                Path = 'LinoriaCursors/' .. (Source:gsub('[^%w%.]', '_'):sub(-80));
+
+                if not isfile(Path) then
+                    if not isfolder('LinoriaCursors') then
+                        makefolder('LinoriaCursors');
+                    end;
+
+                    writefile(Path, game:HttpGet(Source));
+                end;
+            end;
+
+            if Path:lower():find('%.cur$') then
+                local Png, Hot = CurToPng(readfile(Path));
+                local PngPath = Path:sub(1, -5) .. '.png';
+                writefile(PngPath, Png);
+                return GetCustomAsset(PngPath), Hot;
+            end;
+
+            return GetCustomAsset(Path);
+        end);
+
+        if not Ok then
+            Library:Notify('Cursor image failed: ' .. tostring(Asset), 4);
+            Asset = nil;
+        end;
+
+        Library.CursorAsset = Asset;
+        Library.CursorHotspot = Ok and Hotspot or Vector2.zero;
+    end;
+
+    if Library.CursorAsset and not Library.CursorImage then
+        Library.CursorImage = Library:Create('ImageLabel', {
+            Name = 'Cursor';
+            BackgroundTransparency = 1;
+            ImageTransparency = 1;
+            Active = false;
+            Visible = false;
+            ZIndex = 10000;
+            Parent = ScreenGui;
+        });
+        pcall(function() Library.CursorImage.Interactable = false; end); -- never take hover/clicks from the menu
+    end;
+
+    if Library.CursorImage then
+        Library.CursorImage.Image = Library.CursorAsset or '';
+        Library.CursorImage.Size = UDim2.fromOffset(Library.CursorSize, Library.CursorSize);
+
+        if not Library.CursorAsset then
+            Library.CursorImage.Visible = false;
+        end;
+    end;
+end;
+
 local BaseAddons = {};
 
 do
@@ -1123,7 +1223,11 @@ do
             Library:PlacePopupNear(PickerFrameOuter, DisplayFrame, 4);
         end;
 
-        DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(PlacePicker)
+        -- Only while open (Show places it): every hidden popup re-placing itself on each window move forced a layout
+        -- pass per dropdown / picker and dropped the FPS while dragging the menu.
+        DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
+            if PickerFrameOuter.Visible then PlacePicker(); end;
+        end)
 
         Library:RegisterPopup(PickerFrameOuter);
 
@@ -1376,7 +1480,9 @@ do
                 )
             end
 
-            DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(updateMenuPosition)
+            DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
+                if ContextMenu.Container.Visible then updateMenuPosition(); end; -- only while open, see PlacePicker
+            end)
             ContextMenu.Inner.Layout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(updateMenuSize)
 
             task.spawn(updateMenuPosition)
@@ -1746,7 +1852,9 @@ do
             Library:PlacePopup(ModeSelectOuter, Pos.X + Size.X + 4, Pos.Y + 1, Pos.X - 4, Pos.Y + Size.Y);
         end;
 
-        ToggleLabel:GetPropertyChangedSignal('AbsolutePosition'):Connect(PlaceModeSelect);
+        ToggleLabel:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
+            if ModeSelectOuter.Visible then PlaceModeSelect(); end; -- only while open, see the color picker
+        end);
 
         Library:RegisterPopup(ModeSelectOuter);
 
@@ -3447,7 +3555,9 @@ do
         RecalculateListPosition();
         RecalculateListSize();
 
-        DropdownOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(RecalculateListPosition);
+        DropdownOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
+            if ListOuter.Visible then RecalculateListPosition(); end; -- only while open, see the color picker
+        end);
 
         Library:RegisterPopup(ListOuter);
 
@@ -5792,6 +5902,18 @@ function Library:CreateWindow(...)
                 InputService.MouseIconEnabled = false;
 
                 local mPos = InputService:GetMouseLocation();
+                local Custom = Library.CursorAsset and Library.CursorImage;
+
+                Cursor.Visible = not Custom;
+                CursorOutline.Visible = not Custom;
+
+                if Custom then
+                    -- GUI space (no top-bar inset), 1px off the hotspot so the image is never the thing under the mouse
+                    Custom.Visible = true;
+                    Custom.ImageTransparency = 1 - Alpha;
+                    local Hot = (Library.CursorHotspot or Vector2.zero) * (Library.CursorSize or 24);
+                    Custom.Position = UDim2.fromOffset(Mouse.X + 1 - Hot.X, Mouse.Y + 1 - Hot.Y);
+                end;
 
                 Cursor.Color = Library.AccentColor;
                 Cursor.Transparency = Alpha;
@@ -5807,6 +5929,10 @@ function Library:CreateWindow(...)
             end;
 
             InputService.MouseIconEnabled = State;
+
+            if Library.CursorImage then
+                Library.CursorImage.Visible = false;
+            end;
 
             Cursor:Remove();
             CursorOutline:Remove();
@@ -6282,6 +6408,10 @@ local ThemeManager = {} do
 		MenuGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
+		MenuGroup:AddInput('CursorImage', { Text = 'Custom cursor', Placeholder = 'Image URL, file or rbxassetid', Finished = true, Tooltip = 'Image shown as the menu cursor. A URL is downloaded once (getcustomasset). Empty: default triangle' })
+		MenuGroup:AddSlider('CursorSize', { Text = 'Cursor size', Default = 24, Min = 8, Max = 64, Rounding = 0, Suffix = 'px', HideMax = true })
+		Options.CursorImage:OnChanged(function(Value) Library:SetCursor(Value) end)
+		Options.CursorSize:OnChanged(function(Value) Library:SetCursor(nil, Value) end)
 		MenuGroup:AddToggle('WindowGlow', { Text = 'Window glow', Default = false, Tooltip = 'Soft accent-colored glow around the menu' })
 		local GlowBox = MenuGroup:AddDependencyBox()
 		GlowBox:AddSlider('GlowSize', { Text = 'Glow size', Default = 30, Min = 5, Max = 100, Rounding = 0, Suffix = 'px', HideMax = true })
