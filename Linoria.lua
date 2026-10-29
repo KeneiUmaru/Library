@@ -41,6 +41,9 @@
         ThemeManager:BuildMenuSection(tab)        -- Kenya Client Menu + Accent groupboxes (sets the menu keybind); call before ApplyToTab
         Sliders and tab areas size from the real window, so custom CreateWindow sizes work
         Every connection is tracked so Library:Unload() leaves nothing running
+        Mobile: touch works as a click everywhere (sliders, pickers, dragging); phones get a fitted window and a
+                draggable "Menu" button (Library.MobileButton) since there is no toggle key
+        Window resize grip (bottom-right dots, NieR style): drag with mouse or finger, min 400x300
 ]]
 
 local InputService = game:GetService('UserInputService');
@@ -52,7 +55,35 @@ local RunService = game:GetService('RunService')
 local TweenService = game:GetService('TweenService');
 local RenderStepped = RunService.RenderStepped;
 local LocalPlayer = Players.LocalPlayer;
-local Mouse = LocalPlayer:GetMouse();
+local PlayerMouse = LocalPlayer:GetMouse();
+
+-- Touch support: a finger counts as the left mouse button everywhere. Mouse.X / Mouse.Y read the last touch
+-- position while a finger is in use and the real mouse again once it moves (hybrid devices).
+local IsMobile = InputService.TouchEnabled and not InputService.MouseEnabled;
+local LastTouch = nil;
+local HeldTouches = {};
+local Mouse = setmetatable({}, { __index = function(_, Key) return (LastTouch or PlayerMouse)[Key]; end });
+
+local function IsClick(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch then
+        HeldTouches[Input] = true;
+        LastTouch = Input.Position;
+        return true;
+    end;
+    return Input.UserInputType == Enum.UserInputType.MouseButton1;
+end;
+
+-- Replaces IsMouseButtonPressed(MouseButton1) in drag loops so they also run while a finger is down.
+local function IsHeld()
+    for Touch in next, HeldTouches do
+        local State = Touch.UserInputState;
+        if State ~= Enum.UserInputState.End and State ~= Enum.UserInputState.Cancel then
+            return true;
+        end;
+        HeldTouches[Touch] = nil;
+    end;
+    return InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1);
+end;
 
 local ProtectGui = protectgui or (syn and syn.protect_gui) or (function() end);
 
@@ -117,7 +148,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 11;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 12;         -- bump when the public API changes; clients check this against the GitHub copy
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -157,6 +188,14 @@ end;
 local function AccentIsDynamic()
     return Library.RainbowAccent or Library.GradientAccent or Library.GradientMode == 'Custom';
 end;
+
+table.insert(Library.Signals, InputService.InputChanged:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch then
+        LastTouch = Input.Position;
+    elseif Input.UserInputType == Enum.UserInputType.MouseMovement then
+        LastTouch = nil;
+    end;
+end));
 
 table.insert(Library.Signals, RenderStepped:Connect(function(Delta)
     RainbowStep = RainbowStep + Delta
@@ -497,7 +536,7 @@ function Library:MakeDraggable(Instance, Cutoff)
     end;
 
     local function Update()
-        local Point = InputService:GetMouseLocation();
+        local Point = Vector2.new(Mouse.X, Mouse.Y);
         local X, Y = (Point.X - StartMouse.X) / ParentScale, (Point.Y - StartMouse.Y) / ParentScale;
         if X ~= 0 or Y ~= 0 then Moved = true; end;
         -- Preserve scale coordinates and anchors; only add the cursor delta.
@@ -517,18 +556,18 @@ function Library:MakeDraggable(Instance, Cutoff)
 
     local function Step()
         if not Instance.Parent then Stop(false); return; end;
-        if not InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then Stop(true); return; end;
+        if not IsHeld() then Stop(true); return; end;
         Update();
     end;
 
     Instance.InputBegan:Connect(function(Input)
-        if Input.UserInputType ~= Enum.UserInputType.MouseButton1 or Dragging then return; end;
+        if not IsClick(Input) or Dragging then return; end;
         ParentScale = GetParentScale();
         local OwnScale = Instance:FindFirstChildOfClass('UIScale');
         local HeaderScale = ParentScale * (OwnScale and OwnScale.Scale or 1);
         local HeaderY = Mouse.Y - Instance.AbsolutePosition.Y;
         if HeaderY < 0 or HeaderY > (Cutoff or 40) * HeaderScale then return; end;
-        StartMouse, StartPosition = InputService:GetMouseLocation(), Instance.Position;
+        StartMouse, StartPosition = Vector2.new(Mouse.X, Mouse.Y), Instance.Position;
         Dragging, Moved = true, false;
         -- Fresh input, once per rendered frame, before camera/UI rendering. No chase tween.
         RunService:BindToRenderStep(Binding, Enum.RenderPriority.Input.Value + 1, function()
@@ -536,7 +575,7 @@ function Library:MakeDraggable(Instance, Cutoff)
         end);
     end);
     local EndConnection = InputService.InputEnded:Connect(function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1 then Library:RunOnUIThread(Stop, true); end;
+        if IsClick(Input) then Library:RunOnUIThread(Stop, true); end;
     end);
     local FocusConnection = InputService.WindowFocusReleased:Connect(function() Library:RunOnUIThread(Stop, true); end);
     Library:GiveSignal(EndConnection);
@@ -1327,7 +1366,7 @@ do
                 );
 
                 Button.InputBegan:Connect(function(Input)
-                    if Input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                    if not IsClick(Input) then
                         return
                     end
 
@@ -1478,8 +1517,8 @@ do
         end;
 
         SatVibMap.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-                while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+            if IsClick(Input) then
+                while IsHeld() do
                     local MinX = SatVibMap.AbsolutePosition.X;
                     local MaxX = MinX + SatVibMap.AbsoluteSize.X;
                     local MouseX = math.clamp(Mouse.X, MinX, MaxX);
@@ -1500,8 +1539,8 @@ do
         end);
 
         HueSelectorInner.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-                while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+            if IsClick(Input) then
+                while IsHeld() do
                     local MinY = HueSelectorInner.AbsolutePosition.Y;
                     local MaxY = MinY + HueSelectorInner.AbsoluteSize.Y;
                     local MouseY = math.clamp(Mouse.Y, MinY, MaxY);
@@ -1517,7 +1556,7 @@ do
         end);
 
         DisplayFrame.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
                 if PickerFrameOuter.Visible then
                     ColorPicker:Hide()
                 else
@@ -1532,8 +1571,8 @@ do
 
         if TransparencyBoxInner then
             TransparencyBoxInner.InputBegan:Connect(function(Input)
-                if Input.UserInputType == Enum.UserInputType.MouseButton1 then
-                    while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+                if IsClick(Input) then
+                    while IsHeld() do
                         local MinX = TransparencyBoxInner.AbsolutePosition.X;
                         local MaxX = MinX + TransparencyBoxInner.AbsoluteSize.X;
                         local MouseX = math.clamp(Mouse.X, MinX, MaxX);
@@ -1551,7 +1590,7 @@ do
         end;
 
         Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if IsClick(Input) then
                 local AbsPos, AbsSize = PickerFrameOuter.AbsolutePosition, PickerFrameOuter.AbsoluteSize;
 
                 if Mouse.X < AbsPos.X or Mouse.X > AbsPos.X + AbsSize.X
@@ -1728,7 +1767,7 @@ do
             end;
 
             Label.InputBegan:Connect(function(Input)
-                if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+                if IsClick(Input) then
                     ModeButton:Select();
                     Library:AttemptSave();
                 end;
@@ -1818,7 +1857,7 @@ do
         local Picking = false;
 
         PickOuter.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
                 Picking = true;
 
                 DisplayLabel.Text = '';
@@ -1895,7 +1934,7 @@ do
                 KeyPicker:Update();
             end;
 
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if IsClick(Input) then
                 local AbsPos, AbsSize = ModeSelectOuter.AbsolutePosition, ModeSelectOuter.AbsoluteSize;
 
                 if Mouse.X < AbsPos.X or Mouse.X > AbsPos.X + AbsSize.X
@@ -2106,7 +2145,7 @@ do
                     return false
                 end
 
-                if Input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                if not IsClick(Input) then
                     return false
                 end
 
@@ -2622,7 +2661,7 @@ do
         end;
 
         ToggleRegion.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
                 Toggle:SetValue(not Toggle.Value) -- Why was it not like this from the start?
                 Library:AttemptSave();
             end;
@@ -2820,8 +2859,8 @@ do
         end;
 
         SliderInner.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
-                while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+                while IsHeld() do
                     -- Mouse is in screen pixels, the track width (MaxSize) is unscaled; divide by the window
                     -- scale so the fill tracks the cursor at any UI scale.
                     local Scale = Library.WindowScale and Library.WindowScale.Scale or 1;
@@ -3483,7 +3522,7 @@ do
                 end;
 
                 ButtonLabel.InputBegan:Connect(function(Input)
-                    if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    if IsClick(Input) then
                         local Value = Row.Value;
                         if Value == nil then return end;
                         local Selected = Info.Multi and Dropdown.Value[Value] or Dropdown.Value == Value;
@@ -3626,7 +3665,7 @@ do
         end;
 
         DropdownOuter.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
                 if ListOuter.Visible then
                     Dropdown:CloseDropdown();
                 else
@@ -3636,7 +3675,7 @@ do
         end);
 
         Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if IsClick(Input) then
                 local AbsPos, AbsSize = ListOuter.AbsolutePosition, ListOuter.AbsoluteSize;
 
                 if Mouse.X < AbsPos.X or Mouse.X > AbsPos.X + AbsSize.X
@@ -4177,7 +4216,7 @@ local function SectionHolder(Section)
         Library:RegisterPopup(Section.Holder);
 
         Section.Holder.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if IsClick(Input) then
                 RaiseSection(Section);
             end;
         end);
@@ -4435,7 +4474,7 @@ end;
 local function DragSection(Section)
     local Start = MousePoint();
 
-    while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+    while IsHeld() do
         if (MousePoint() - Start).Magnitude >= SectionDragThreshold then
             break;
         end;
@@ -4443,7 +4482,7 @@ local function DragSection(Section)
         RenderStepped:Wait();
     end;
 
-    if Library.DraggingSection or not InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+    if Library.DraggingSection or not IsHeld() then
         return; -- a click, not a drag
     end;
 
@@ -4487,7 +4526,7 @@ local function DragSection(Section)
     local Column, Order;
     local ShownColumn, ShownOrder;
 
-    while InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+    while IsHeld() do
         local Point = MousePoint();
         Holder.Position = UDim2.fromOffset(Point.X - Grab.X, Point.Y - Grab.Y);
         Column, Order = SectionDropTarget(Section, Point);
@@ -4589,14 +4628,14 @@ function Library:RegisterSection(Info)
     Library:AddToolTip('Stay on screen while the menu is hidden', Section.PinButton);
 
     Section.FoldButton.InputBegan:Connect(function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+        if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
             Library:SetSectionFolded(Section, not Section.Folded);
             Library:SaveLayout();
         end;
     end);
 
     Section.PinButton.InputBegan:Connect(function(Input)
-        if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if IsClick(Input) then
             Section.Stay = not Section.Stay;
             Library:UpdateSectionButtons(Section);
             Library:SaveLayout();
@@ -4604,7 +4643,7 @@ function Library:RegisterSection(Info)
     end);
 
     Section.Outer.InputBegan:Connect(function(Input)
-        if Input.UserInputType ~= Enum.UserInputType.MouseButton1 or Library:MouseIsOverOpenedFrame() then
+        if not IsClick(Input) or Library:MouseIsOverOpenedFrame() then
             return;
         end;
 
@@ -4706,6 +4745,16 @@ function Library:CreateWindow(...)
     if typeof(Config.Position) ~= 'UDim2' then Config.Position = UDim2.fromOffset(175, 50) end
     if typeof(Config.Size) ~= 'UDim2' then Config.Size = UDim2.fromOffset(550, 600) end
 
+    -- Phones: shrink the window to fit the screen and center it (the corner grip resizes it from there).
+    local Viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize;
+    if IsMobile and Viewport then
+        Config.Size = UDim2.fromOffset(
+            math.min(Config.Size.X.Offset, math.floor(Viewport.X * 0.92)),
+            math.min(Config.Size.Y.Offset, math.floor(Viewport.Y * 0.85))
+        );
+        Config.Center = true;
+    end;
+
     if Config.Center then
         Config.AnchorPoint = Vector2.new(0.5, 0.5)
         Config.Position = UDim2.fromScale(0.5, 0.5)
@@ -4727,6 +4776,79 @@ function Library:CreateWindow(...)
     });
 
     Library:MakeDraggable(Outer, 25);
+
+    -- NieR-style resize grip: a triangle of 2px accent dots in the bottom-right corner, faint at rest and solid on
+    -- hover / while dragging. Drag it (mouse or finger) to resize; the top-left corner stays put.
+    local MinWindowSize = Vector2.new(400, 300);
+    local ResizeGrip = Library:Create('Frame', {
+        Name = 'ResizeGrip';
+        AnchorPoint = Vector2.new(1, 1);
+        BackgroundTransparency = 1;
+        Position = UDim2.new(1, 0, 1, 0);
+        Size = IsMobile and UDim2.fromOffset(28, 28) or UDim2.fromOffset(16, 16);
+        ZIndex = 20;
+        Parent = Outer;
+    });
+
+    local GripDots = {};
+    local GripIdle = 0.55;
+    for Column = 0, 2 do
+        for Row = 0, 2 - Column do
+            local Dot = Library:Create('Frame', {
+                AnchorPoint = Vector2.new(1, 1);
+                BackgroundColor3 = Library.AccentColor;
+                BackgroundTransparency = GripIdle;
+                BorderSizePixel = 0;
+                Position = UDim2.new(1, -3 - Column * 4, 1, -3 - Row * 4);
+                Size = UDim2.fromOffset(2, 2);
+                ZIndex = 21;
+                Parent = ResizeGrip;
+            });
+            Library:AddToRegistry(Dot, { BackgroundColor3 = 'AccentColor' });
+            table.insert(GripDots, Dot);
+        end;
+    end;
+
+    local GripHovered, Resizing = false, false;
+    local function RefreshGrip()
+        for _, Dot in next, GripDots do
+            Library:Animate(Dot, 0.15, { BackgroundTransparency = (GripHovered or Resizing) and 0 or GripIdle });
+        end;
+    end;
+
+    ResizeGrip.MouseEnter:Connect(function() GripHovered = true; RefreshGrip(); end);
+    ResizeGrip.MouseLeave:Connect(function() GripHovered = false; RefreshGrip(); end);
+
+    ResizeGrip.InputBegan:Connect(function(Input)
+        if not IsClick(Input) or Resizing then return; end;
+
+        Resizing = true;
+        RefreshGrip();
+
+        local StartPointer = Vector2.new(Mouse.X, Mouse.Y);
+        local StartSize, StartPosition = Outer.Size, Outer.Position;
+        local Anchor = Outer.AnchorPoint;
+
+        while IsHeld() and Outer.Parent do
+            -- pointer moves in screen pixels; Size is unscaled UI pixels, Position is screen pixels
+            local Scale = math.max(Library.UIScale or 1, 0.01);
+            local Delta = (Vector2.new(Mouse.X, Mouse.Y) - StartPointer) / Scale;
+            local Width = math.max(StartSize.X.Offset + Delta.X, MinWindowSize.X);
+            local Height = math.max(StartSize.Y.Offset + Delta.Y, MinWindowSize.Y);
+
+            Outer.Size = UDim2.new(StartSize.X.Scale, Width, StartSize.Y.Scale, Height);
+            -- shift by the anchored share of the growth so the top-left corner stays fixed
+            Outer.Position = StartPosition + UDim2.fromOffset(
+                Anchor.X * (Width - StartSize.X.Offset) * Scale,
+                Anchor.Y * (Height - StartSize.Y.Offset) * Scale
+            );
+
+            RenderStepped:Wait();
+        end;
+
+        Resizing = false;
+        RefreshGrip();
+    end);
 
     -- Soft accent-colored glow behind the window; see Library:SetGlow. ZIndex 0 puts it under Outer
     -- (the ScreenGui uses Global ZIndex), and being a child it scales and drags with the window.
@@ -5477,7 +5599,7 @@ function Library:CreateWindow(...)
                 end;
 
                 Button.InputBegan:Connect(function(Input)
-                    if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
+                    if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
                         Tab:Show();
                         Tab:Resize();
                     end;
@@ -5513,7 +5635,7 @@ function Library:CreateWindow(...)
         end;
 
         TabButton.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+            if IsClick(Input) then
                 Tab:ShowTab();
             end;
         end);
@@ -5673,7 +5795,7 @@ function Library:CreateWindow(...)
                 WindowScale.Scale = 0.95 * Library.UIScale;
             end;
 
-            RunCursor();
+            if not IsMobile then RunCursor(); end; -- no drawn cursor on touch-only screens
         else
             -- Close any dropdown / color picker popups so they don't linger after the window is gone.
             for Frame in next, Library.OpenedFrames do
@@ -5743,6 +5865,42 @@ function Library:CreateWindow(...)
             task.spawn(Library.Toggle)
         end
     end))
+
+    -- Touch screens have no menu key: a draggable on-screen button toggles the menu (a drag does not count as a tap).
+    if InputService.TouchEnabled and not Library.MobileButton then
+        local MobileButton = Library:Create('TextButton', {
+            Name = 'MobileToggle';
+            AutoButtonColor = false;
+            BackgroundColor3 = Library.MainColor;
+            BorderColor3 = Library.AccentColor;
+            Position = UDim2.new(0, 12, 0.5, -18);
+            Size = UDim2.fromOffset(60, 36);
+            Font = Library.Font;
+            Text = 'Menu';
+            TextColor3 = Library.FontColor;
+            TextSize = 14;
+            ZIndex = 200;
+            Parent = ScreenGui;
+        });
+
+        Library:AddToRegistry(MobileButton, {
+            BackgroundColor3 = 'MainColor';
+            BorderColor3 = 'AccentColor';
+            TextColor3 = 'FontColor';
+        }, true);
+
+        Library:MakeDraggable(MobileButton, 36);
+
+        local PressPosition;
+        MobileButton.InputBegan:Connect(function(Input)
+            if IsClick(Input) then PressPosition = MobileButton.Position; end;
+        end);
+        MobileButton.Activated:Connect(function()
+            if PressPosition == MobileButton.Position then task.spawn(Library.Toggle); end;
+        end);
+
+        Library.MobileButton = MobileButton;
+    end;
 
     if Config.AutoShow then task.spawn(Library.Toggle) end
 
