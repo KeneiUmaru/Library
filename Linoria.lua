@@ -976,6 +976,32 @@ function Library:PlacePopup(Frame, X, Y, AltX, AltY)
     );
 end;
 
+-- Puts a popup at the first spot next to Anchor that fits fully on screen: below, above, right, left. Short screens
+-- (phones) fit neither below nor above, so the popup moves beside its opener instead of covering it.
+function Library:PlacePopupNear(Frame, Anchor, Gap)
+    local Pos, Size = Anchor.AbsolutePosition, Anchor.AbsoluteSize;
+    local View = ScreenGui.AbsoluteSize;
+    local Scale = Library.UIScale or 1;
+    local W, H = Frame.Size.X.Offset * Scale, Frame.Size.Y.Offset * Scale;
+    local ClampX = math.clamp(Pos.X, 0, math.max(View.X - W, 0));
+    local ClampY = math.clamp(Pos.Y + Size.Y / 2 - H / 2, 0, math.max(View.Y - H, 0));
+
+    for _, Spot in next, {
+        { ClampX, Pos.Y + Size.Y + Gap },
+        { ClampX, Pos.Y - Gap - H },
+        { Pos.X + Size.X + Gap, ClampY },
+        { Pos.X - Gap - W, ClampY },
+    } do
+        local X, Y = Spot[1], Spot[2];
+        if X >= 0 and Y >= 0 and X + W <= View.X and Y + H <= View.Y then
+            Frame.Position = UDim2.fromOffset(X, Y);
+            return;
+        end;
+    end;
+
+    Library:PlacePopup(Frame, Pos.X, Pos.Y + Size.Y + Gap, Pos.X + Size.X, Pos.Y - Gap); -- nothing fits: clamp
+end;
+
 -- Scales the main window and every popup. 1 = default size.
 function Library:SetScale(Scale)
     Scale = math.clamp(tonumber(Scale) or 1, 0.5, 2);
@@ -1066,10 +1092,8 @@ do
             Parent = ScreenGui,
         });
 
-        -- Below the swatch, flipping to right-aligned / above it when it would leave the screen.
         local function PlacePicker()
-            local Pos, Size = DisplayFrame.AbsolutePosition, DisplayFrame.AbsoluteSize;
-            Library:PlacePopup(PickerFrameOuter, Pos.X, Pos.Y + 18, Pos.X + Size.X, Pos.Y - 4);
+            Library:PlacePopupNear(PickerFrameOuter, DisplayFrame, 4);
         end;
 
         DisplayFrame:GetPropertyChangedSignal('AbsolutePosition'):Connect(PlacePicker)
@@ -3357,10 +3381,8 @@ do
             Parent = ScreenGui;
         });
 
-        -- Below the dropdown, flipping above it when the list would run off the bottom of the screen.
         local function RecalculateListPosition()
-            local Pos, Size = DropdownOuter.AbsolutePosition, DropdownOuter.AbsoluteSize;
-            Library:PlacePopup(ListOuter, Pos.X, Pos.Y + Size.Y + 1, nil, Pos.Y - 1);
+            Library:PlacePopupNear(ListOuter, DropdownOuter, 1);
         end;
 
         local function RecalculateListSize(YSize)
