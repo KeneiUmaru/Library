@@ -2663,9 +2663,31 @@ do
             Library:AddToolTip(Info.Tooltip, ToggleRegion)
         end
 
+        -- On-fill sized from the box's real pixel height so (box - fill) is even and the gap is equal on every side.
+        -- A fixed (1, -4) fill is 9px, and at a fractional UI scale the box renders an even 14px, which left the fill
+        -- 1px off-center.
+        local function OnFillSize()
+            if ToggleOuter.AbsoluteSize.Y < 1 then
+                return UDim2.new(1, -4, 1, -4); -- not laid out yet; the AbsoluteSize hook below resizes it
+            end;
+
+            local Real = ToggleOuter.AbsoluteSize.Y;
+            local Box = math.floor(Real + 0.5);
+            local Gap = math.max(2, math.floor(2 * Real / 13 + 0.5));
+            -- a fraction of the box, not an offset: UDim offsets are whole numbers and would round the fill again
+            local Fraction = math.max(Box - Gap * 2, 1) / Real;
+            return UDim2.fromScale(Fraction, Fraction);
+        end;
+
+        ToggleOuter:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+            if Toggle.Value then
+                ToggleInner.Size = OnFillSize();
+            end;
+        end);
+
         function Toggle:Display(Instant)
             local On = Toggle.Value;
-            local FillSize = On and UDim2.new(1, -4, 1, -4) or UDim2.fromScale(0, 0);
+            local FillSize = On and OnFillSize() or UDim2.fromScale(0, 0);
             local LabelFade = On and 0 or 0.35;
 
             UpdateStroke();
