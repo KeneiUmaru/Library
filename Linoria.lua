@@ -2565,15 +2565,21 @@ do
             Parent = ToggleOuter;
         });
 
+        -- Off: the outline color lifted toward the font color. The plain outline color nearly matches the background
+        -- on dark themes (Catppuccin, Midnight Ocean, ...), so an off toggle looked like it had no box at all.
+        local function OffStrokeColor()
+            return Library.OutlineColor:Lerp(Library.FontColor, 0.35);
+        end;
+
         local ToggleStroke = Library:Create('UIStroke', {
-            Color = Library.OutlineColor;
+            Color = OffStrokeColor();
             Thickness = 1;
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
             Parent = ToggleOuter;
         });
 
         Library:AddToRegistry(ToggleStroke, {
-            Color = 'OutlineColor';
+            Color = OffStrokeColor;
         });
 
         local ToggleInner = Library:Create('Frame', {
@@ -2631,11 +2637,11 @@ do
         -- Outline follows the accent while the toggle is on or hovered.
         local function UpdateStroke()
             local Accent = Toggle.Value or Hovering;
-            ToggleStroke.Color = Accent and Library.AccentColor or Library.OutlineColor;
+            ToggleStroke.Color = Accent and Library.AccentColor or OffStrokeColor();
 
             local Reg = Library.RegistryMap[ToggleStroke];
             if Reg then
-                Reg.Properties.Color = Accent and 'AccentColor' or 'OutlineColor';
+                Reg.Properties.Color = Accent and 'AccentColor' or OffStrokeColor;
             end;
         end;
 
