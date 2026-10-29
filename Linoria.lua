@@ -1003,8 +1003,35 @@ function Library:PlacePopupNear(Frame, Anchor, Gap)
 end;
 
 -- Scales the main window and every popup. 1 = default size.
+local PendingScale, ScaleWaiting = nil, false;
+
 function Library:SetScale(Scale)
     Scale = math.clamp(tonumber(Scale) or 1, 0.5, 2);
+
+    -- Applied once the mouse / finger is released: rescaling mid-drag moved the scale slider itself under the
+    -- cursor, which fed a new value back in every frame and shrank the menu at once.
+    if IsHeld() then
+        PendingScale = Scale;
+        if not ScaleWaiting then
+            ScaleWaiting = true;
+            task.spawn(function()
+                while IsHeld() do
+                    RenderStepped:Wait();
+                end;
+                ScaleWaiting = false;
+                Library:SetScale(PendingScale);
+            end);
+        end;
+        return;
+    end;
+
+    -- Below 1 a 1px outline is under a pixel wide, and the outline and the black line inside it round onto the same
+    -- screen pixel, so outer outlines vanish (0.99 looked broken). Snap near-1 values to exactly 1.
+    -- shortcut: real shrinking (< 0.95) still thins outlines; fixing that needs every bordered frame redrawn.
+    if math.abs(Scale - 1) < 0.05 then
+        Scale = 1;
+    end;
+
     Library.UIScale = Scale;
 
     if Library.WindowScale then
@@ -5962,6 +5989,16 @@ local ThemeManager = {} do
 		['Tokyo Night'] 	= { 6, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"191925","AccentColor":"6759b3","BackgroundColor":"16161f","OutlineColor":"323232"}') },
 		['Ubuntu'] 			= { 7, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"3e3e3e","AccentColor":"e2581e","BackgroundColor":"323232","OutlineColor":"191919"}') },
 		['Quartz'] 			= { 8, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"232330","AccentColor":"426e87","BackgroundColor":"1d1b26","OutlineColor":"27232f"}') },
+		['Sakura'] = { 9, httpService:JSONDecode('{"FontColor":"fff0f6","MainColor":"2a1f2b","AccentColor":"ff8fb8","BackgroundColor":"211822","OutlineColor":"4a3346"}') },
+		['Midnight Ocean'] = { 10, httpService:JSONDecode('{"FontColor":"e6f4ff","MainColor":"101a2b","AccentColor":"38bdf8","BackgroundColor":"0b1322","OutlineColor":"1f3350"}') },
+		['Aurora'] = { 11, httpService:JSONDecode('{"FontColor":"eafffb","MainColor":"14201f","AccentColor":"5eead4","BackgroundColor":"0f1918","OutlineColor":"25403c"}') },
+		['Dracula'] = { 12, httpService:JSONDecode('{"FontColor":"f8f8f2","MainColor":"282a36","AccentColor":"bd93f9","BackgroundColor":"21222c","OutlineColor":"44475a"}') },
+		['Nord'] = { 13, httpService:JSONDecode('{"FontColor":"eceff4","MainColor":"2e3440","AccentColor":"88c0d0","BackgroundColor":"272c36","OutlineColor":"434c5e"}') },
+		['Catppuccin'] = { 14, httpService:JSONDecode('{"FontColor":"cdd6f4","MainColor":"1e1e2e","AccentColor":"cba6f7","BackgroundColor":"181825","OutlineColor":"313244"}') },
+		['Gruvbox'] = { 15, httpService:JSONDecode('{"FontColor":"ebdbb2","MainColor":"282828","AccentColor":"fe8019","BackgroundColor":"1d2021","OutlineColor":"504945"}') },
+		['Cyberpunk'] = { 16, httpService:JSONDecode('{"FontColor":"e0fbfc","MainColor":"14121f","AccentColor":"fcee0a","BackgroundColor":"0d0b16","OutlineColor":"2e2a45"}') },
+		['Rose Gold'] = { 17, httpService:JSONDecode('{"FontColor":"fff5f2","MainColor":"2b2224","AccentColor":"e8a598","BackgroundColor":"221b1c","OutlineColor":"4a3a3c"}') },
+		['Royal Gold'] = { 18, httpService:JSONDecode('{"FontColor":"fff8e1","MainColor":"1a1a14","AccentColor":"d4af37","BackgroundColor":"141410","OutlineColor":"3a3626"}') },
 	}
 
 	function ThemeManager:ApplyTheme(theme)
