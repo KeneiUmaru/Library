@@ -3796,6 +3796,8 @@ do
         end;
 
         function Dropdown:OpenDropdown()
+            -- width from the header as it is now: built once, the list stayed narrow after the window was resized
+            RecalculateListSize(ListOuter.Size.Y.Offset);
             RecalculateListPosition();
             ListOuter.Visible = true;
             Dropdown:RenderRows(true);
@@ -4617,10 +4619,15 @@ function Library:LoadLayout()
 end;
 
 function Library:ResetLayout()
+    -- every box back to its default column and order in one pass (docking one at a time renumbered the columns
+    -- between moves, so equal orders could swap), folded per Section.DefaultFolded
     for _, Section in next, Library.Sections do
         Section.Stay = true;
-        Library:DockSection(Section, Section.DefaultSide, Section.DefaultOrder);
-        Library:SetSectionFolded(Section, false);
+        Section.Floating = false;
+        Section.Outer.LayoutOrder = Section.DefaultOrder;
+        MoveSectionBox(Section, Section.DefaultSide == 2 and Section.Tab.RightSide or Section.Tab.LeftSide);
+        Library:UpdateSectionButtons(Section);
+        Library:SetSectionFolded(Section, Section.DefaultFolded == true);
     end;
 
     Library:SaveLayout();
@@ -5014,7 +5021,9 @@ function Library:CreateWindow(...)
             -- pointer moves in screen pixels; Size is unscaled UI pixels, Position is screen pixels
             local Scale = math.max(Library.UIScale or 1, 0.01);
             local Delta = (Vector2.new(Mouse.X, Mouse.Y) - StartPointer) / Scale;
-            local Width = math.max(StartSize.X.Offset + Delta.X, MinWindowSize.X);
+            -- never narrower than the tab bar, or the last tabs run off the window
+            local TabsWidth = Window.TabListLayout and Window.TabListLayout.AbsoluteContentSize.X / Scale + 40 or 0;
+            local Width = math.max(StartSize.X.Offset + Delta.X, MinWindowSize.X, TabsWidth);
             local Height = math.max(StartSize.Y.Offset + Delta.Y, MinWindowSize.Y);
 
             Outer.Size = UDim2.new(StartSize.X.Scale, Width, StartSize.Y.Scale, Height);
@@ -5125,6 +5134,7 @@ function Library:CreateWindow(...)
         SortOrder = Enum.SortOrder.LayoutOrder;
         Parent = TabArea;
     });
+    Window.TabListLayout = TabListLayout; -- the resize grip keeps the window at least this wide
 
     local TabContainer = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
