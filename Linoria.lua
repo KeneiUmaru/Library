@@ -1591,11 +1591,8 @@ do
 
         Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
             if IsClick(Input) then
-                local AbsPos, AbsSize = PickerFrameOuter.AbsolutePosition, PickerFrameOuter.AbsoluteSize;
-
-                if Mouse.X < AbsPos.X or Mouse.X > AbsPos.X + AbsSize.X
-                    or Mouse.Y < (AbsPos.Y - 20 - 1) or Mouse.Y > AbsPos.Y + AbsSize.Y then
-
+                -- the swatch toggles the picker itself; the picker can sit above it when flipped near the screen bottom
+                if not Library:IsMouseOverFrame(PickerFrameOuter) and not Library:IsMouseOverFrame(DisplayFrame) then
                     ColorPicker:Hide();
                 end;
 
@@ -3676,11 +3673,8 @@ do
 
         Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
             if IsClick(Input) then
-                local AbsPos, AbsSize = ListOuter.AbsolutePosition, ListOuter.AbsoluteSize;
-
-                if Mouse.X < AbsPos.X or Mouse.X > AbsPos.X + AbsSize.X
-                    or Mouse.Y < (AbsPos.Y - 20 - 1) or Mouse.Y > AbsPos.Y + AbsSize.Y then
-
+                -- the header toggles the list itself; the list can sit above it when flipped near the screen bottom
+                if not Library:IsMouseOverFrame(ListOuter) and not Library:IsMouseOverFrame(DropdownOuter) then
                     Dropdown:CloseDropdown();
                 end;
             end;
