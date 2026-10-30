@@ -43,7 +43,8 @@
         ThemeManager:BuildMenuSection(tab)        -- Kenya Client Menu + Accent groupboxes (sets the menu keybind); call before ApplyToTab
         Sliders and tab areas size from the real window, so custom CreateWindow sizes work
         Every connection is tracked so Library:Unload() leaves nothing running
-        Mobile: touch works as a click everywhere (sliders, pickers, dragging); phones get a fitted window and a
+        Mobile: touch works as a click everywhere (sliders, pickers, dragging); toggles, buttons, dropdowns and tabs
+                fire on a still tap, so swiping to scroll does not switch them; phones get a fitted window and a
                 draggable "Menu" button (Library.MobileButton) since there is no toggle key
         Window resize grip (bottom-right dots, NieR style): drag with mouse or finger, min 400x300
 ]]
@@ -85,6 +86,29 @@ local function IsHeld()
         HeldTouches[Touch] = nil;
     end;
     return InputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1);
+end;
+
+-- For tap controls (toggles, buttons, dropdowns, tabs). A mouse click fires at once; a finger fires on release and
+-- only if it stayed put, so swiping to scroll the menu no longer switches on everything it started on or passed over.
+local TouchStart = {}; -- touch -> where it first went down (set by the InputBegan signal below)
+local TAP_SLOP = 10;
+
+local function IsTap(Input)
+    if Input.UserInputType ~= Enum.UserInputType.Touch then
+        return IsClick(Input);
+    end;
+
+    IsClick(Input);
+    local Start = TouchStart[Input] or Input.Position;
+
+    while Input.UserInputState == Enum.UserInputState.Begin or Input.UserInputState == Enum.UserInputState.Change do
+        if (Input.Position - Start).Magnitude > TAP_SLOP then
+            return false;
+        end;
+        RenderStepped:Wait();
+    end;
+
+    return Input.UserInputState == Enum.UserInputState.End and (Input.Position - Start).Magnitude <= TAP_SLOP;
 end;
 
 local ProtectGui = protectgui or (syn and syn.protect_gui) or (function() end);
@@ -196,6 +220,18 @@ table.insert(Library.Signals, InputService.InputChanged:Connect(function(Input)
         LastTouch = Input.Position;
     elseif Input.UserInputType == Enum.UserInputType.MouseMovement then
         LastTouch = nil;
+    end;
+end));
+
+table.insert(Library.Signals, InputService.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch then
+        TouchStart[Input] = Input.Position;
+    end;
+end));
+
+table.insert(Library.Signals, InputService.InputEnded:Connect(function(Input)
+    if TouchStart[Input] then
+        task.defer(function() TouchStart[Input] = nil; end); -- after the tap handlers have read it
     end;
 end));
 
@@ -1523,7 +1559,7 @@ do
                 );
 
                 Button.InputBegan:Connect(function(Input)
-                    if not IsClick(Input) then
+                    if not IsTap(Input) then
                         return
                     end
 
@@ -1713,7 +1749,7 @@ do
         end);
 
         DisplayFrame.InputBegan:Connect(function(Input)
-            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+            if IsTap(Input) and not Library:MouseIsOverOpenedFrame() then
                 if PickerFrameOuter.Visible then
                     ColorPicker:Hide()
                 else
@@ -1923,7 +1959,7 @@ do
             end;
 
             Label.InputBegan:Connect(function(Input)
-                if IsClick(Input) then
+                if IsTap(Input) then
                     ModeButton:Select();
                     Library:AttemptSave();
                 end;
@@ -2013,7 +2049,7 @@ do
         local Picking = false;
 
         PickOuter.InputBegan:Connect(function(Input)
-            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+            if IsTap(Input) and not Library:MouseIsOverOpenedFrame() then
                 Picking = true;
 
                 DisplayLabel.Text = '';
@@ -2301,7 +2337,7 @@ do
                     return false
                 end
 
-                if not IsClick(Input) then
+                if not IsTap(Input) then
                     return false
                 end
 
@@ -2845,7 +2881,7 @@ do
         end;
 
         ToggleRegion.InputBegan:Connect(function(Input)
-            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+            if IsTap(Input) and not Library:MouseIsOverOpenedFrame() then
                 Toggle:SetValue(not Toggle.Value) -- Why was it not like this from the start?
                 Library:AttemptSave();
             end;
@@ -3706,7 +3742,7 @@ do
                 end;
 
                 ButtonLabel.InputBegan:Connect(function(Input)
-                    if IsClick(Input) then
+                    if IsTap(Input) then
                         local Value = Row.Value;
                         if Value == nil then return end;
                         local Selected = Info.Multi and Dropdown.Value[Value] or Dropdown.Value == Value;
@@ -3851,7 +3887,7 @@ do
         end;
 
         DropdownOuter.InputBegan:Connect(function(Input)
-            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+            if IsTap(Input) and not Library:MouseIsOverOpenedFrame() then
                 if ListOuter.Visible then
                     Dropdown:CloseDropdown();
                 else
@@ -4816,14 +4852,14 @@ function Library:RegisterSection(Info)
     Library:AddToolTip('Stay on screen while the menu is hidden', Section.PinButton);
 
     Section.FoldButton.InputBegan:Connect(function(Input)
-        if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+        if IsTap(Input) and not Library:MouseIsOverOpenedFrame() then
             Library:SetSectionFolded(Section, not Section.Folded);
             Library:SaveLayout();
         end;
     end);
 
     Section.PinButton.InputBegan:Connect(function(Input)
-        if IsClick(Input) then
+        if IsTap(Input) then
             Section.Stay = not Section.Stay;
             Library:UpdateSectionButtons(Section);
             Library:SaveLayout();
@@ -5790,7 +5826,7 @@ function Library:CreateWindow(...)
                 end;
 
                 Button.InputBegan:Connect(function(Input)
-                    if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
+                    if IsTap(Input) and not Library:MouseIsOverOpenedFrame() then
                         Tab:Show();
                         Tab:Resize();
                     end;
@@ -5826,7 +5862,7 @@ function Library:CreateWindow(...)
         end;
 
         TabButton.InputBegan:Connect(function(Input)
-            if IsClick(Input) then
+            if IsTap(Input) then
                 Tab:ShowTab();
             end;
         end);
