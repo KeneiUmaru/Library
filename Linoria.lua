@@ -22,6 +22,7 @@
         Groupbox:AddButton({ Text, Func, DoubleClick = true, ConfirmationTime = 3 }) -- second click confirms; otherwise resets
         Groupbox:AddLabel(text, wrap?, tooltip?)  -- compact help labels; :AddTooltip(text) also works
         Dropdown ValueTooltips = { [value] = description } -- or function(value); describes hovered options and selection
+        Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Sections (every groupbox / tabbox)        -- -/+ folds it; drag its title to move it (accent box = where it
@@ -3641,6 +3642,63 @@ do
             ScrollBarImageColor3 = 'AccentColor'
         })
 
+        -- Search box over the list: shown when the list scrolls (more than MAX_DROPDOWN_ITEMS values), or per
+        -- Info.Searchable = true / false. Rows render from Shown, the values matching the typed text.
+        local SEARCH_HEIGHT = 20;
+        local Shown = Dropdown.Values;
+
+        local SearchBox = Library:Create('TextBox', {
+            BackgroundTransparency = 1;
+            ClearTextOnFocus = false;
+            Font = Library.Font;
+            PlaceholderColor3 = Color3.fromRGB(190, 190, 190);
+            PlaceholderText = 'Search...';
+            Position = UDim2.fromOffset(6, 0);
+            Size = UDim2.new(1, -12, 0, SEARCH_HEIGHT);
+            Text = '';
+            TextColor3 = Library.FontColor;
+            TextSize = 14;
+            TextXAlignment = Enum.TextXAlignment.Left;
+            Visible = false;
+            ZIndex = 26;
+            Parent = ListInner;
+        });
+
+        Library:ApplyTextStroke(SearchBox);
+        Library:AddToRegistry(SearchBox, { TextColor3 = 'FontColor' });
+
+        Library:AddToRegistry(Library:Create('Frame', {
+            BackgroundColor3 = Library.OutlineColor;
+            BorderSizePixel = 0;
+            Position = UDim2.new(0, -6, 1, -1);
+            Size = UDim2.new(1, 12, 0, 1);
+            ZIndex = 26;
+            Parent = SearchBox;
+        }), { BackgroundColor3 = 'OutlineColor' });
+
+        local function IsSearchable()
+            if Info.Searchable ~= nil then
+                return Info.Searchable;
+            end;
+            return #Dropdown.Values > MAX_DROPDOWN_ITEMS;
+        end;
+
+        local function ApplyFilter()
+            local Query = SearchBox.Visible and SearchBox.Text:lower() or '';
+            Shown = Dropdown.Values;
+
+            if Query ~= '' then
+                Shown = {};
+                for _, Value in ipairs(Dropdown.Values) do
+                    if tostring(Value):lower():find(Query, 1, true) then
+                        table.insert(Shown, Value);
+                    end;
+                end;
+            end;
+
+            Scrolling.CanvasSize = UDim2.fromOffset(0, #Shown * 20 + 1);
+        end;
+
         function Dropdown:Display()
             local Values = Dropdown.Values;
             local Str = '';
@@ -3683,7 +3741,7 @@ do
             local First = math.max(1, math.floor(Scrolling.CanvasPosition.Y / Scale / 20) + 1);
             if not Force and FirstRendered == First then return end;
             FirstRendered = First;
-            local Count = math.min(#Dropdown.Values, MAX_DROPDOWN_ITEMS + 2);
+            local Count = math.min(#Shown, MAX_DROPDOWN_ITEMS + 2);
             for Index = #Rows + 1, Count do
                 local Row = {};
                 local Button = Library:Create('Frame', {
@@ -3787,7 +3845,7 @@ do
             end;
             for Index, Row in ipairs(Rows) do
                 local ValueIndex = First + Index - 1;
-                local Value = Dropdown.Values[ValueIndex];
+                local Value = Shown[ValueIndex];
                 Row.Button.Visible = Value ~= nil;
                 if Row.Value ~= Value then
                     Row.Scroller:Stop();
@@ -3804,13 +3862,23 @@ do
         end;
 
         function Dropdown:BuildDropdownList()
-            local Count = #Dropdown.Values;
-            Scrolling.CanvasSize = UDim2.fromOffset(0, (Count * 20) + 1);
-            local Y = math.clamp(Count * 20, 0, MAX_DROPDOWN_ITEMS * 20) + 1;
+            local Top = IsSearchable() and SEARCH_HEIGHT or 0;
+            SearchBox.Visible = Top > 0;
+            Scrolling.Position = UDim2.fromOffset(0, Top);
+            Scrolling.Size = UDim2.new(1, 0, 1, -Top);
+            ApplyFilter();
+            -- height from all values, not the matches, so the list does not jump around while typing
+            local Y = math.clamp(#Dropdown.Values * 20, 0, MAX_DROPDOWN_ITEMS * 20) + 1 + Top;
             RecalculateListSize(Y);
             Dropdown:Display();
             Dropdown:RenderRows(true);
         end;
+
+        SearchBox:GetPropertyChangedSignal('Text'):Connect(function()
+            ApplyFilter();
+            Scrolling.CanvasPosition = Vector2.zero;
+            Dropdown:RenderRows(true);
+        end);
 
         Scrolling:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
             Dropdown:RenderRows();
@@ -3836,8 +3904,12 @@ do
             RecalculateListSize(ListOuter.Size.Y.Offset);
             RecalculateListPosition();
             ListOuter.Visible = true;
+            SearchBox.Text = ''; -- each open starts unfiltered (also re-renders the rows)
             Dropdown:RenderRows(true);
             Library.OpenedFrames[ListOuter] = true;
+            if SearchBox.Visible and not IsMobile then
+                SearchBox:CaptureFocus(); -- type straight away; phones only get the keyboard when they tap the box
+            end;
             -- the list's contents drop in a few px and the arrow turns (Library.Animations)
             ListInner.Position = UDim2.fromOffset(0, Library.Animations and -6 or 0);
             Library:Animate(ListInner, 0.12, { Position = UDim2.new() });
@@ -3847,6 +3919,9 @@ do
         function Dropdown:CloseDropdown()
             ListOuter.Visible = false;
             Library.OpenedFrames[ListOuter] = nil;
+            if SearchBox:IsFocused() then
+                SearchBox:ReleaseFocus();
+            end;
             Library:Animate(DropdownArrow, 0.15, { Rotation = 0 });
         end;
 
