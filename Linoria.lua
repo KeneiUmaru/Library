@@ -5403,6 +5403,50 @@ function Library:CreateWindow(...)
     });
     Window.TabListLayout = TabListLayout; -- the resize grip keeps the window at least this wide
 
+    -- One accent bar under the tab names that slides to the active tab (like the tabbox one). It lives beside the
+    -- strip, which a UIListLayout arranges, and reads the active button's laid-out position.
+    local WindowUnderline = Library:Create('Frame', {
+        AnchorPoint = Vector2.new(0.5, 1);
+        BackgroundColor3 = Library.AccentColor;
+        BorderSizePixel = 0;
+        Size = UDim2.new(0, 0, 0, 2);
+        ZIndex = 2;
+        Parent = MainSectionInner;
+    });
+
+    Library:AddToRegistry(WindowUnderline, {
+        BackgroundColor3 = 'AccentColor';
+    });
+
+    function Window:MoveUnderline(Instant)
+        local Tab = Window.ActiveTab;
+        if not Tab then
+            return;
+        end;
+
+        -- AbsolutePosition is in screen px; the window's UIScale (menu scale and the open/close zoom) divides it out
+        local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
+        local Scale = math.max(ScaleObject and ScaleObject.Scale or 1, 0.01);
+        local Width = Tab.Button.Size.X.Offset;
+        -- rounded: UDim offsets are whole numbers and would otherwise truncate (1-2px left of centre at scale 1.3)
+        local X = math.floor((Tab.Button.AbsolutePosition.X - TabArea.AbsolutePosition.X) / Scale + Width / 2 + 0.5);
+        local Goal = {
+            Position = UDim2.fromOffset(TabArea.Position.X.Offset + X, TabArea.Position.Y.Offset + TabArea.Size.Y.Offset);
+            Size = UDim2.fromOffset(Width - 6, 2);
+        };
+
+        if Instant then
+            Library:Create(WindowUnderline, Goal);
+        else
+            Library:Animate(WindowUnderline, 0.2, Goal);
+        end;
+    end;
+
+    -- tabs added or reordered move the active button: put the bar back under it
+    TabListLayout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
+        Window:MoveUnderline(true);
+    end);
+
     local TabContainer = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
         BorderColor3 = Library.OutlineColor;
@@ -5490,19 +5534,7 @@ function Library:CreateWindow(...)
             TabLabelStroke.Transparency = 0.45;
         end;
 
-        local TabUnderline = Library:Create('Frame', {
-            AnchorPoint = Vector2.new(0.5, 1);
-            Position = UDim2.new(0.5, 0, 1, 0);
-            BackgroundColor3 = Library.AccentColor;
-            BorderSizePixel = 0;
-            Size = UDim2.new(0, 0, 0, 2);
-            ZIndex = 2;
-            Parent = TabButton;
-        });
-
-        Library:AddToRegistry(TabUnderline, {
-            BackgroundColor3 = 'AccentColor';
-        });
+        Tab.Button = TabButton; -- Window:MoveUnderline puts the shared bar under it
 
         local TabTweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
         local TabActive = false;
@@ -5633,7 +5665,7 @@ function Library:CreateWindow(...)
             Window.ActiveTab = Tab;
             TabActive = true;
             FadeTabLabel(0);
-            Library:CreateTween(TabUnderline, TabTweenInfo, { Size = UDim2.new(1, -6, 0, 2) }):Play();
+            Window:MoveUnderline(Previous == nil); -- slides from the previous tab; the first one just appears
 
             Tab.FadeToken = {}; -- cancels this tab's own unfinished hide
             TabFrame.Visible = true;
@@ -5654,7 +5686,6 @@ function Library:CreateWindow(...)
             local WasActive = TabActive;
             TabActive = false;
             FadeTabLabel(0.45);
-            Library:CreateTween(TabUnderline, TabTweenInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
 
             if not (WasActive and Library.Animations and (Window.SlideDirection or 0) ~= 0) then
                 TabFrame.Visible = false;
