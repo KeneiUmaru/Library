@@ -4666,6 +4666,9 @@ local PIN_FOLD_STROKE = 1; -- header icons sit next to 14px text; 2px strokes lo
 function Library:UpdateSectionButtons(Section)
     Section.FoldBar.Visible = Section.Folded; -- the vertical bar turns the minus into a plus
     Section.PinButton.Visible = Section.Floating;
+    if Section.LayoutHeader then
+        Section.LayoutHeader(); -- the pin only shows while floating; the header makes room for it
+    end;
     Section.PinOn.Visible = Section.Stay;
     Section.PinOff.Visible = not Section.Stay;
 
@@ -5799,6 +5802,12 @@ function Library:CreateWindow(...)
                 return Container;
             end;
             Section.FoldedHeight = 20 + 2 + 2;
+            -- floating: keep the centred title clear of the pin + fold icons on the right (same gap on the left)
+            GroupboxLabel.TextTruncate = Enum.TextTruncate.AtEnd;
+            Section.LayoutHeader = function()
+                GroupboxLabel.Position = Section.Floating and UDim2.new(0, 34, 0, 2) or UDim2.new(0, 4, 0, 2);
+                GroupboxLabel.Size = Section.Floating and UDim2.new(1, -68, 0, 18) or UDim2.new(1, 0, 0, 18);
+            end;
 
             function Groupbox:Resize()
                 if Section.Animating then
@@ -5895,7 +5904,7 @@ function Library:CreateWindow(...)
             local TabboxButtons = Library:Create('Frame', {
                 BackgroundTransparency = 1;
                 Position = UDim2.new(0, 0, 0, TabStripTop);
-                Size = UDim2.new(1, -18, 0, TabStripHeight); -- room for the fold button
+                Size = UDim2.new(1, -18, 0, TabStripHeight); -- room for the fold button (and the pin: LayoutHeader)
                 ZIndex = 5;
                 Parent = BoxInner;
             });
@@ -5924,6 +5933,14 @@ function Library:CreateWindow(...)
                 return Tabbox.ActiveTab and Tabbox.ActiveTab.Container;
             end;
             Section.FoldedHeight = ContentTop + 2;
+            -- the strip leaves room for the fold button, and for the pin as well while floating
+            local function HeaderReserve()
+                return Section.Floating and 34 or 18;
+            end;
+            Section.LayoutHeader = function()
+                TabboxButtons.Size = UDim2.new(1, -HeaderReserve(), 0, TabStripHeight);
+                Tabbox:MoveUnderline(true);
+            end;
 
             Library:Create('UIListLayout', {
                 FillDirection = Enum.FillDirection.Horizontal;
@@ -5969,12 +5986,12 @@ function Library:CreateWindow(...)
                     return;
                 end;
 
-                -- centre of tab i of N in the strip, which is 18 px narrower than the box (fold button)
+                -- centre of tab i of N in the strip, which is HeaderReserve() px narrower than the box
                 local F = (Active.Index - 0.5) / TabboxTabCount;
                 local ButtonWidth = Active.Button.AbsoluteSize.X / math.max(Library.UIScale or 1, 0.01);
                 local Width = ButtonWidth > 6 and math.min(Active.UnderlineWidth, ButtonWidth - 6) or Active.UnderlineWidth;
                 local Goal = {
-                    Position = UDim2.new(F, -18 * F, 0, TabStripTop + TabStripHeight);
+                    Position = UDim2.new(F, -HeaderReserve() * F, 0, TabStripTop + TabStripHeight);
                     Size = UDim2.new(0, Width, 0, 2);
                 };
 
