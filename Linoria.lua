@@ -3647,34 +3647,86 @@ do
         local SEARCH_HEIGHT = 20;
         local Shown = Dropdown.Values;
 
-        local SearchBox = Library:Create('TextBox', {
-            BackgroundTransparency = 1;
-            ClearTextOnFocus = false;
-            Font = Library.Font;
-            PlaceholderColor3 = Color3.fromRGB(190, 190, 190);
-            PlaceholderText = 'Search...';
-            Position = UDim2.fromOffset(6, 0);
-            Size = UDim2.new(1, -12, 0, SEARCH_HEIGHT);
-            Text = '';
-            TextColor3 = Library.FontColor;
-            TextSize = 14;
-            TextXAlignment = Enum.TextXAlignment.Left;
+        -- darker strip (BackgroundColor) with an accent search icon, so it does not read as another option
+        local SearchRow = Library:Create('Frame', {
+            BackgroundColor3 = Library.BackgroundColor;
+            BorderSizePixel = 0;
+            Size = UDim2.new(1, 0, 0, SEARCH_HEIGHT);
             Visible = false;
             ZIndex = 26;
             Parent = ListInner;
         });
 
-        Library:ApplyTextStroke(SearchBox);
-        Library:AddToRegistry(SearchBox, { TextColor3 = 'FontColor' });
+        Library:AddToRegistry(SearchRow, { BackgroundColor3 = 'BackgroundColor' });
 
         Library:AddToRegistry(Library:Create('Frame', {
             BackgroundColor3 = Library.OutlineColor;
             BorderSizePixel = 0;
-            Position = UDim2.new(0, -6, 1, -1);
-            Size = UDim2.new(1, 12, 0, 1);
-            ZIndex = 26;
-            Parent = SearchBox;
+            Position = UDim2.new(0, 0, 1, -1);
+            Size = UDim2.new(1, 0, 0, 1);
+            ZIndex = 27;
+            Parent = SearchRow;
         }), { BackgroundColor3 = 'OutlineColor' });
+
+        -- Lucide "search" (circle r8 at 11,11 + handle 16.65,16.65 -> 21,21 on its 24 grid), drawn with frames:
+        -- Roblox cannot show the SVG and an uploaded image would need an asset id.
+        local SearchIcon = Library:Create('Frame', {
+            AnchorPoint = Vector2.new(0, 0.5);
+            BackgroundTransparency = 1;
+            Position = UDim2.new(0, 5, 0.5, 0);
+            Size = UDim2.fromOffset(14, 14);
+            ZIndex = 27;
+            Parent = SearchRow;
+        });
+
+        local IconRing = Library:Create('Frame', {
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            BackgroundTransparency = 1;
+            Position = UDim2.fromScale(11 / 24, 11 / 24);
+            Size = UDim2.fromScale(16 / 24, 16 / 24);
+            ZIndex = 27;
+            Parent = SearchIcon;
+        });
+
+        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = IconRing });
+        Library:AddToRegistry(Library:Create('UIStroke', {
+            Color = Library.AccentColor;
+            Thickness = 1.5;
+            Parent = IconRing;
+        }), { Color = 'AccentColor' });
+
+        local IconHandle = Library:Create('Frame', {
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            BackgroundColor3 = Library.AccentColor;
+            BorderSizePixel = 0;
+            Position = UDim2.fromScale(18.8 / 24, 18.8 / 24);
+            Rotation = 45;
+            Size = UDim2.new(7 / 24, 0, 0, 2);
+            ZIndex = 27;
+            Parent = SearchIcon;
+        });
+
+        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = IconHandle });
+        Library:AddToRegistry(IconHandle, { BackgroundColor3 = 'AccentColor' });
+
+        local SearchBox = Library:Create('TextBox', {
+            BackgroundTransparency = 1;
+            ClearTextOnFocus = false;
+            Font = Library.Font;
+            PlaceholderColor3 = Color3.fromRGB(150, 150, 150);
+            PlaceholderText = 'Search...';
+            Position = UDim2.fromOffset(24, 0);
+            Size = UDim2.new(1, -30, 1, -1);
+            Text = '';
+            TextColor3 = Library.FontColor;
+            TextSize = 14;
+            TextXAlignment = Enum.TextXAlignment.Left;
+            ZIndex = 27;
+            Parent = SearchRow;
+        });
+
+        Library:ApplyTextStroke(SearchBox);
+        Library:AddToRegistry(SearchBox, { TextColor3 = 'FontColor' });
 
         local function IsSearchable()
             if Info.Searchable ~= nil then
@@ -3684,7 +3736,7 @@ do
         end;
 
         local function ApplyFilter()
-            local Query = SearchBox.Visible and SearchBox.Text:lower() or '';
+            local Query = SearchRow.Visible and SearchBox.Text:lower() or '';
             Shown = Dropdown.Values;
 
             if Query ~= '' then
@@ -3863,7 +3915,7 @@ do
 
         function Dropdown:BuildDropdownList()
             local Top = IsSearchable() and SEARCH_HEIGHT or 0;
-            SearchBox.Visible = Top > 0;
+            SearchRow.Visible = Top > 0;
             Scrolling.Position = UDim2.fromOffset(0, Top);
             Scrolling.Size = UDim2.new(1, 0, 1, -Top);
             ApplyFilter();
@@ -3907,7 +3959,7 @@ do
             SearchBox.Text = ''; -- each open starts unfiltered (also re-renders the rows)
             Dropdown:RenderRows(true);
             Library.OpenedFrames[ListOuter] = true;
-            if SearchBox.Visible and not IsMobile then
+            if SearchRow.Visible and not IsMobile then
                 SearchBox:CaptureFocus(); -- type straight away; phones only get the keyboard when they tap the box
             end;
             -- the list's contents drop in a few px and the arrow turns (Library.Animations)
