@@ -5915,6 +5915,45 @@ function Library:CreateWindow(...)
                 BackgroundColor3 = 'OutlineColor';
             });
 
+            -- One accent bar for the whole strip, sitting on the divider; it slides to the active tab and fits its
+            -- name's width. It lives in BoxInner, not the strip, which a UIListLayout arranges.
+            local TabboxUnderline = Library:Create('Frame', {
+                AnchorPoint = Vector2.new(0.5, 1);
+                BackgroundColor3 = Library.AccentColor;
+                BorderSizePixel = 0;
+                Size = UDim2.new(0, 0, 0, 2);
+                ZIndex = 8;
+                Parent = BoxInner;
+            });
+
+            Library:AddToRegistry(TabboxUnderline, {
+                BackgroundColor3 = 'AccentColor';
+            });
+
+            local TabboxTabCount = 0;
+
+            function Tabbox:MoveUnderline(Instant)
+                local Active = Tabbox.ActiveTab;
+                if not Active then
+                    return;
+                end;
+
+                -- centre of tab i of N in the strip, which is 18 px narrower than the box (fold button)
+                local F = (Active.Index - 0.5) / TabboxTabCount;
+                local ButtonWidth = Active.Button.AbsoluteSize.X / math.max(Library.UIScale or 1, 0.01);
+                local Width = ButtonWidth > 6 and math.min(Active.UnderlineWidth, ButtonWidth - 6) or Active.UnderlineWidth;
+                local Goal = {
+                    Position = UDim2.new(F, -18 * F, 0, TabStripTop + TabStripHeight);
+                    Size = UDim2.new(0, Width, 0, 2);
+                };
+
+                if Instant then
+                    Library:Create(TabboxUnderline, Goal);
+                else
+                    Library:Animate(TabboxUnderline, 0.2, Goal);
+                end;
+            end;
+
             function Tabbox:AddTab(Name)
                 local Tab = {};
                 local TabInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
@@ -5946,22 +5985,11 @@ function Library:CreateWindow(...)
                     ButtonLabelStroke.Transparency = 0.45;
                 end;
 
-                local UnderlineWidth = Library:GetTextBounds(Name, Library.Font, 14) + 10;
-
-                -- sits on the divider line, directly under the tab name
-                local Underline = Library:Create('Frame', {
-                    AnchorPoint = Vector2.new(0.5, 1);
-                    Position = UDim2.new(0.5, 0, 1, 0);
-                    BackgroundColor3 = Library.AccentColor;
-                    BorderSizePixel = 0;
-                    Size = UDim2.new(0, 0, 0, 2);
-                    ZIndex = 8;
-                    Parent = Button;
-                });
-
-                Library:AddToRegistry(Underline, {
-                    BackgroundColor3 = 'AccentColor';
-                });
+                TabboxTabCount = TabboxTabCount + 1;
+                Tab.Index = TabboxTabCount;
+                Tab.Button = Button;
+                Tab.UnderlineWidth = Library:GetTextBounds(Name, Library.Font, 14) + 10;
+                Button.LayoutOrder = TabboxTabCount; -- the strip order must match Index for the underline position
 
                 local function FadeLabel(Transparency)
                     Library:CreateTween(ButtonLabel, TabInfo, { TextTransparency = Transparency }):Play();
@@ -6002,12 +6030,12 @@ function Library:CreateWindow(...)
                         Tab:Hide();
                     end;
 
+                    local First = Tabbox.ActiveTab == nil;
                     Active = true;
                     Tabbox.ActiveTab = Tab;
                     Container.Visible = not Section.Folded;
                     FadeLabel(0);
-                    local Width = math.min(UnderlineWidth, math.max(Button.AbsoluteSize.X - 6, 0));
-                    Library:CreateTween(Underline, TabInfo, { Size = UDim2.new(0, Width > 0 and Width or UnderlineWidth, 0, 2) }):Play();
+                    Tabbox:MoveUnderline(First); -- slides from the previous tab; the first one just appears
 
                     Tab:Resize();
                 end;
@@ -6016,7 +6044,6 @@ function Library:CreateWindow(...)
                     Active = false;
                     Container.Visible = false;
                     FadeLabel(0.45);
-                    Library:CreateTween(Underline, TabInfo, { Size = UDim2.new(0, 0, 0, 2) }):Play();
                 end;
 
                 function Tab:Resize()
@@ -6075,6 +6102,8 @@ function Library:CreateWindow(...)
                 if #TabboxButtons:GetChildren() == 2 then
                     Tab:Show();
                 end;
+
+                Tabbox:MoveUnderline(true); -- one more tab narrows every slot, so the bar moves under its tab again
 
                 return Tab;
             end;
