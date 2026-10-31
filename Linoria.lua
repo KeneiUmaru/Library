@@ -93,6 +93,7 @@ end;
 -- only if it stayed put, so swiping to scroll the menu no longer switches on everything it started on or passed over.
 local TouchStart = {}; -- touch -> where it first went down (set by the InputBegan signal below)
 local TAP_SLOP = 10;
+local FINGER_CLEARANCE = 48; -- px between a touch and its tooltip, so the fingertip does not cover the text
 
 local function IsTap(Input)
     if Input.UserInputType ~= Enum.UserInputType.Touch then
@@ -227,6 +228,7 @@ end));
 table.insert(Library.Signals, InputService.InputBegan:Connect(function(Input)
     if Input.UserInputType == Enum.UserInputType.Touch then
         TouchStart[Input] = Input.Position;
+        LastTouch = Input.Position;
     end;
 end));
 
@@ -695,19 +697,30 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
         return HoverInstance.Parent ~= nil
     end
 
-    -- Right of and below the cursor by default; flipped to the other side of the cursor when that would run
-    -- past the screen edge, then clamped so it is always fully on screen.
-    local function PlaceTooltip()
+    -- Mouse: right of and below the cursor, flipped to the other side of the cursor when that would run past the
+    -- screen edge. Finger: centred above the touch point (below it only when there is no room), since the fingertip
+    -- covers everything right under it. Then clamped so it is always fully on screen.
+    local function PlaceTooltip(Touch)
         local Screen = Library.ScreenGui.AbsoluteSize;
         local Width, Height = Tooltip.AbsoluteSize.X, Tooltip.AbsoluteSize.Y;
-        local PosX, PosY = Mouse.X + 15, Mouse.Y + 12;
+        local PosX, PosY;
 
-        if PosX + Width > Screen.X - 4 then
-            PosX = Mouse.X - 10 - Width;
-        end;
+        if Touch then
+            PosX = Touch.X - Width / 2;
+            PosY = Touch.Y - FINGER_CLEARANCE - Height;
+            if PosY < 4 then
+                PosY = Touch.Y + FINGER_CLEARANCE;
+            end;
+        else
+            PosX, PosY = Mouse.X + 15, Mouse.Y + 12;
 
-        if PosY + Height > Screen.Y - 4 then
-            PosY = Mouse.Y - 6 - Height;
+            if PosX + Width > Screen.X - 4 then
+                PosX = Mouse.X - 10 - Width;
+            end;
+
+            if PosY + Height > Screen.Y - 4 then
+                PosY = Mouse.Y - 6 - Height;
+            end;
         end;
 
         PosX = math.clamp(PosX, 4, math.max(4, Screen.X - Width - 4));
@@ -715,7 +728,8 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
         Tooltip.Position = UDim2.fromOffset(PosX, PosY);
     end;
 
-    HoverInstance.MouseEnter:Connect(function()
+    -- Shows the tooltip while StillOn() holds; Where() gives the touch point (nil = follow the mouse).
+    local function ShowWhile(StillOn, Where)
         if not AllowOpenedFrame and Library:MouseIsOverOpenedFrame() then
             return
         end
@@ -725,17 +739,40 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
         local Serial = HoverSerial
         while IsHovering and HoverSerial == Serial and Tooltip.Parent and IsShown() do
             Tooltip.Visible = UpdateText()
-            if not Library:IsMouseOverFrame(HoverInstance) then break end
-            PlaceTooltip()
+            if not StillOn() then break end
+            PlaceTooltip(Where and Where())
             RunService.Heartbeat:Wait()
         end
         if HoverSerial == Serial then
             IsHovering = false
             if Tooltip.Parent then Tooltip.Visible = false end
         end
+    end
+
+    HoverInstance.MouseEnter:Connect(function()
+        if LastTouch then
+            return -- a finger: the InputBegan handler below shows it for as long as the touch is held
+        end
+        ShowWhile(function() return Library:IsMouseOverFrame(HoverInstance) end)
+    end)
+
+    -- Touch: shown for as long as the finger is held down on the element, above the fingertip.
+    HoverInstance.InputBegan:Connect(function(Input)
+        if Input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        ShowWhile(function()
+            local State = Input.UserInputState
+            return State == Enum.UserInputState.Begin or State == Enum.UserInputState.Change
+        end, function()
+            return Vector2.new(Input.Position.X, Input.Position.Y)
+        end)
     end)
 
     HoverInstance.MouseLeave:Connect(function()
+        if LastTouch then
+            return -- touch tooltips end when the finger lifts, not on the leave a release fires
+        end
         HoverSerial = HoverSerial + 1
         IsHovering = false
         Tooltip.Visible = false
