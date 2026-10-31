@@ -948,6 +948,74 @@ function Library:AddGlow(Parent, G, ZIndex, ColorKey)
     return Glow;
 end;
 
+-- Lucide icons (lucide.dev) rebuilt from frames on their 24-unit grid: Roblox cannot draw SVG, and image assets need
+-- uploading. lines = { x1, y1, x2, y2 }, circles = { cx, cy, r }. pin / pin-off are simplified outlines of Lucide's.
+local LucideIcons = {
+    ['search'] = { lines = { { 21, 21, 16.65, 16.65 } }, circles = { { 11, 11, 8 } } };
+    ['minus'] = { lines = { { 5, 12, 19, 12 } } };
+    ['plus'] = { lines = { { 5, 12, 19, 12 }, { 12, 5, 12, 19 } } };
+    ['check'] = { lines = { { 20, 6, 9, 17 }, { 9, 17, 4, 12 } } };
+    ['pin'] = { lines = { { 8, 3, 16, 3 }, { 9, 3, 9, 10 }, { 15, 3, 15, 10 }, { 9, 10, 5, 15 }, { 15, 10, 19, 15 }, { 5, 15, 19, 15 }, { 12, 15, 12, 22 } } };
+};
+LucideIcons['pin-off'] = { lines = table.clone(LucideIcons.pin.lines) };
+table.insert(LucideIcons['pin-off'].lines, { 2, 2, 22, 22 });
+
+-- Info: Parent, Size (px number or UDim2), Position, AnchorPoint, ZIndex, Color (registry key or function, default
+-- 'FontColor'), Thickness (px, default 2). Returns the holder frame and its stroke pieces (in table order: lines,
+-- then circles) so callers can show / hide parts, e.g. the vertical bar of 'plus'.
+function Library:CreateIcon(Name, Info)
+    local Shape = assert(LucideIcons[Name], 'CreateIcon: unknown icon ' .. tostring(Name));
+    local ColorKey = Info.Color or 'FontColor';
+    local Color = type(ColorKey) == 'function' and ColorKey() or Library[ColorKey];
+    local T = Info.Thickness or 2;
+    local ZIndex = Info.ZIndex or 1;
+
+    local Icon = Library:Create('Frame', {
+        AnchorPoint = Info.AnchorPoint or Vector2.zero;
+        BackgroundTransparency = 1;
+        Position = Info.Position or UDim2.new();
+        Size = typeof(Info.Size) == 'UDim2' and Info.Size or UDim2.fromOffset(Info.Size or 14, Info.Size or 14);
+        ZIndex = ZIndex;
+        Parent = Info.Parent;
+    });
+
+    local Pieces = {};
+
+    for _, L in next, Shape.lines or {} do
+        local DX, DY = L[3] - L[1], L[4] - L[2];
+        -- + T px of length gives round caps that also close the joints of polylines
+        local Line = Library:Create('Frame', {
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            BackgroundColor3 = Color;
+            BorderSizePixel = 0;
+            Position = UDim2.fromScale((L[1] + L[3]) / 48, (L[2] + L[4]) / 48);
+            Rotation = math.deg(math.atan2(DY, DX));
+            Size = UDim2.new(math.sqrt(DX * DX + DY * DY) / 24, T, 0, T);
+            ZIndex = ZIndex;
+            Parent = Icon;
+        });
+        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = Line });
+        Library:AddToRegistry(Line, { BackgroundColor3 = ColorKey });
+        table.insert(Pieces, Line);
+    end;
+
+    for _, C in next, Shape.circles or {} do
+        local Ring = Library:Create('Frame', {
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            BackgroundTransparency = 1;
+            Position = UDim2.fromScale(C[1] / 24, C[2] / 24);
+            Size = UDim2.fromScale(C[3] / 12, C[3] / 12);
+            ZIndex = ZIndex;
+            Parent = Icon;
+        });
+        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = Ring });
+        Library:AddToRegistry(Library:Create('UIStroke', { Color = Color; Thickness = T * 0.75; Parent = Ring }), { Color = ColorKey });
+        table.insert(Pieces, Ring);
+    end;
+
+    return Icon, Pieces;
+end;
+
 -- Element glows are hidden unless Library.ElementGlow is on; IsActive() says whether this one should
 -- currently be lit (toggle on, slider above zero, ...). Call Library:ApplyElementGlow after its state changes.
 function Library:TrackElementGlow(Glow, IsActive)
@@ -2746,6 +2814,17 @@ do
             Parent = ToggleInner;
         });
 
+        -- Lucide check over the fill, in the background color so it reads on any accent; shown only while on
+        local ToggleCheck = Library:CreateIcon('check', {
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            Color = 'BackgroundColor';
+            Position = UDim2.fromScale(0.5, 0.5);
+            Size = UDim2.fromScale(0.8, 0.8);
+            Thickness = 1;
+            ZIndex = 7;
+            Parent = ToggleOuter;
+        });
+
         local ToggleGlow = Library:AddGlow(ToggleOuter, 7, 4, 'AccentColor');
         Library:TrackElementGlow(ToggleGlow, function() return Toggle.Value; end);
 
@@ -2837,8 +2916,10 @@ do
 
             UpdateStroke();
             Library:ApplyElementGlow(ToggleGlow, Instant);
+            ToggleCheck.Visible = On; -- grows with the fill; hides at once on off (a shrinking check leaves dots)
 
             if Instant then
+                ToggleCheck.Size = UDim2.fromScale(0.8, 0.8);
                 ToggleInner.Size = FillSize;
                 ToggleLabel.TextTransparency = LabelFade;
                 if ToggleLabelStroke then
@@ -2846,6 +2927,10 @@ do
                 end;
             else
                 Library:CreateTween(ToggleInner, FadeInfo, { Size = FillSize }):Play();
+                if On then
+                    ToggleCheck.Size = UDim2.fromScale(0, 0);
+                    Library:CreateTween(ToggleCheck, FadeInfo, { Size = UDim2.fromScale(0.8, 0.8) }):Play();
+                end;
                 Library:CreateTween(ToggleLabel, FadeInfo, { TextTransparency = LabelFade }):Play();
                 if ToggleLabelStroke then
                     Library:CreateTween(ToggleLabelStroke, FadeInfo, { Transparency = LabelFade }):Play();
@@ -3668,46 +3753,14 @@ do
             Parent = SearchRow;
         }), { BackgroundColor3 = 'OutlineColor' });
 
-        -- Lucide "search" (circle r8 at 11,11 + handle 16.65,16.65 -> 21,21 on its 24 grid), drawn with frames:
-        -- Roblox cannot show the SVG and an uploaded image would need an asset id.
-        local SearchIcon = Library:Create('Frame', {
+        Library:CreateIcon('search', {
             AnchorPoint = Vector2.new(0, 0.5);
-            BackgroundTransparency = 1;
+            Color = 'AccentColor';
             Position = UDim2.new(0, 5, 0.5, 0);
-            Size = UDim2.fromOffset(14, 14);
+            Size = 14;
             ZIndex = 27;
             Parent = SearchRow;
         });
-
-        local IconRing = Library:Create('Frame', {
-            AnchorPoint = Vector2.new(0.5, 0.5);
-            BackgroundTransparency = 1;
-            Position = UDim2.fromScale(11 / 24, 11 / 24);
-            Size = UDim2.fromScale(16 / 24, 16 / 24);
-            ZIndex = 27;
-            Parent = SearchIcon;
-        });
-
-        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = IconRing });
-        Library:AddToRegistry(Library:Create('UIStroke', {
-            Color = Library.AccentColor;
-            Thickness = 1.5;
-            Parent = IconRing;
-        }), { Color = 'AccentColor' });
-
-        local IconHandle = Library:Create('Frame', {
-            AnchorPoint = Vector2.new(0.5, 0.5);
-            BackgroundColor3 = Library.AccentColor;
-            BorderSizePixel = 0;
-            Position = UDim2.fromScale(18.8 / 24, 18.8 / 24);
-            Rotation = 45;
-            Size = UDim2.new(7 / 24, 0, 0, 2);
-            ZIndex = 27;
-            Parent = SearchIcon;
-        });
-
-        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = IconHandle });
-        Library:AddToRegistry(IconHandle, { BackgroundColor3 = 'AccentColor' });
 
         local SearchBox = Library:Create('TextBox', {
             BackgroundTransparency = 1;
@@ -4571,10 +4624,13 @@ local function SectionHolder(Section)
     return Section.Holder;
 end;
 
+local PIN_FOLD_STROKE = 1; -- header icons sit next to 14px text; 2px strokes looked bolder than the title
+
 function Library:UpdateSectionButtons(Section)
-    Section.FoldButton.Text = Section.Folded and '+' or '-';
+    Section.FoldBar.Visible = Section.Folded; -- the vertical bar turns the minus into a plus
     Section.PinButton.Visible = Section.Floating;
-    Section.PinButton.BackgroundColor3 = Section.Stay and Library.AccentColor or Library.MainColor;
+    Section.PinOn.Visible = Section.Stay;
+    Section.PinOff.Visible = not Section.Stay;
 
     if Section.Holder then
         Section.Holder.Visible = Section.Floating and (Section.Stay or Library.Toggled);
@@ -4949,31 +5005,42 @@ function Library:RegisterSection(Info)
         ApplyFold = function() end;
     };
 
-    Section.FoldButton = Library:CreateLabel({
+    -- Lucide minus / plus (one 'plus' icon; UpdateSectionButtons hides its vertical bar while unfolded)
+    Section.FoldButton = Library:Create('Frame', {
+        BackgroundTransparency = 1;
         Position = UDim2.new(1, -16, 0, 2);
         Size = UDim2.fromOffset(14, 16);
-        Text = '-';
-        TextSize = 14;
-        TextXAlignment = Enum.TextXAlignment.Center;
         ZIndex = 12;
         Parent = Info.Inner;
     });
 
+    local _, FoldPieces = Library:CreateIcon('plus', {
+        AnchorPoint = Vector2.new(0.5, 0.5);
+        Position = UDim2.fromScale(0.5, 0.5);
+        Size = 12;
+        Thickness = PIN_FOLD_STROKE;
+        ZIndex = 12;
+        Parent = Section.FoldButton;
+    });
+    Section.FoldBar = FoldPieces[2];
+
+    -- Lucide pin (stays while the menu is hidden) / pin-off (hides with the menu)
     Section.PinButton = Library:Create('Frame', {
-        BackgroundColor3 = Library.AccentColor;
-        BorderColor3 = Library.OutlineColor;
-        Position = UDim2.new(1, -28, 0, 7);
-        Size = UDim2.fromOffset(7, 7);
+        BackgroundTransparency = 1;
+        Position = UDim2.new(1, -31, 0, 3);
+        Size = UDim2.fromOffset(13, 13);
         Visible = false;
         ZIndex = 12;
         Parent = Info.Inner;
     });
 
-    Library:AddToRegistry(Section.PinButton, {
-        BackgroundColor3 = function()
-            return Section.Stay and Library.AccentColor or Library.MainColor;
-        end;
-        BorderColor3 = 'OutlineColor';
+    Section.PinOn = Library:CreateIcon('pin', { Color = 'AccentColor'; Size = 13; Thickness = PIN_FOLD_STROKE; ZIndex = 12; Parent = Section.PinButton });
+    Section.PinOff = Library:CreateIcon('pin-off', {
+        Color = function() return Library.OutlineColor:Lerp(Library.FontColor, 0.5); end;
+        Size = 13;
+        Thickness = PIN_FOLD_STROKE;
+        ZIndex = 12;
+        Parent = Section.PinButton;
     });
 
     Library:AddToolTip('Stay on screen while the menu is hidden', Section.PinButton);
