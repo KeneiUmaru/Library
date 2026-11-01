@@ -23,6 +23,8 @@
         Groupbox:AddLabel(text, wrap?, tooltip?)  -- compact help labels; :AddTooltip(text) also works
         Dropdown ValueTooltips = { [value] = description } -- or function(value); describes hovered options and selection
         Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
+        Library:Notify(text, seconds?)            -- accent bar along the bottom counts the duration down (default 5s),
+                                                  -- then it fades out
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Sections (every groupbox / tabbox)        -- -/+ folds it; drag its title to move it (accent box = where it
@@ -4529,14 +4531,34 @@ function Library:Notify(Text, Time)
         BackgroundColor3 = 'AccentColor';
     }, true);
 
+    -- Time left: an accent bar along the bottom that empties over the notification's duration.
+    local Duration = Time or 5;
+    local TimeBar = Library:Create('Frame', {
+        AnchorPoint = Vector2.new(0, 1);
+        BackgroundColor3 = Library.AccentColor;
+        BorderSizePixel = 0;
+        Position = UDim2.new(0, 2, 1, 0);
+        Size = UDim2.new(1, -2, 0, 2);
+        ZIndex = 104;
+        Parent = NotifyOuter;
+    });
+
+    Library:AddToRegistry(TimeBar, {
+        BackgroundColor3 = 'AccentColor';
+    }, true);
+
     Library:Animate(NotifyOuter, 0.4, { Size = UDim2.new(0, XSize + 8 + 4, 0, YSize) });
+    -- linear, not Library:CreateTween: the countdown runs even with Animations off, it is information
+    TweenService:Create(TimeBar, TweenInfo.new(Duration, Enum.EasingStyle.Linear), { Size = UDim2.new(0, 0, 0, 2) }):Play();
 
     task.spawn(function()
-        task.wait(Time or 5);
+        task.wait(Duration);
 
-        Library:Animate(NotifyOuter, 0.4, { Size = UDim2.new(0, 0, 0, YSize) });
-
-        task.wait(Library.Animations and 0.4 or 0);
+        -- fade out (Library.Animations), then free the slot so the ones below move up
+        if Library.Animations then
+            Library:FadeTree(NotifyOuter, false, 0.35);
+            task.wait(0.35);
+        end;
 
         NotifyOuter:Destroy();
     end);
@@ -4692,6 +4714,7 @@ function Library:SetSectionFolded(Section, Folded, Instant)
     local Token = {};
     Section.FoldToken = Token;
     Section.Animating = nil;
+    Section.Switching = nil;
 
     if Section.FoldRest then
         Library:RestoreTree(Section.FoldRest); -- a fold-out that was still running
@@ -6079,13 +6102,57 @@ function Library:CreateWindow(...)
                     end;
 
                     local First = Tabbox.ActiveTab == nil;
+                    local Switching = not First and Tabbox.ActiveTab ~= Tab;
+                    local From = BoxOuter.Size;
                     Active = true;
                     Tabbox.ActiveTab = Tab;
                     Container.Visible = not Section.Folded;
                     FadeLabel(0);
                     Tabbox:MoveUnderline(First); -- slides from the previous tab; the first one just appears
 
+                    if Section.Animating then
+                        if not Section.Switching then
+                            return; -- mid fold: SetSectionFolded resizes once it ends
+                        end;
+                        Section.Animating = nil; -- mid switch: this one takes over from the current height
+                    end;
+
                     Tab:Resize();
+
+                    -- Switching sub-tabs (Library.Animations): the box eases from the old tab's height to this one's
+                    -- (expanding or folding up) while the new rows fade in. Shares FoldToken / Animating with folding,
+                    -- so a fold or another switch mid-way takes over cleanly.
+                    if not (Switching and Library.Animations and Container.Visible) then
+                        return;
+                    end;
+
+                    local To = BoxOuter.Size;
+                    local Token = {};
+                    Section.FoldToken = Token;
+                    Section.Animating = true;
+                    Section.Switching = true;
+                    BoxOuter.ClipsDescendants = true;
+                    BoxOuter.Size = From;
+                    Library:Animate(BoxOuter, FOLD_TIME, { Size = To });
+                    -- a tab shown again while its last fade-in is still running has half-faded rows: reuse the real
+                    -- values saved then, or FadeTree would take the half-faded ones as real and leave the rows dim
+                    local Now = os.clock();
+                    if not (Tab.SwitchRest and Now < Tab.SwitchRestUntil) then
+                        Tab.SwitchRest = nil;
+                    end;
+                    Tab.SwitchRest = Library:FadeTree(Container, true, FOLD_TIME, Tab.SwitchRest);
+                    Tab.SwitchRestUntil = Now + FOLD_TIME + 0.05;
+
+                    task.delay(FOLD_TIME + 0.02, function()
+                        if Section.FoldToken ~= Token then
+                            return;
+                        end;
+
+                        Section.Animating = nil;
+                        Section.Switching = nil;
+                        BoxOuter.ClipsDescendants = false;
+                        Tabbox.ActiveTab:Resize(); -- picks up anything that changed size meanwhile
+                    end);
                 end;
 
                 function Tab:Hide()
