@@ -3702,6 +3702,7 @@ do
             BorderColor3 = Color3.new(0, 0, 0);
             ZIndex = 20;
             Visible = false;
+            Active = true; -- keeps taps on the list out of the game world (the rows cannot do it, see RenderRows)
             Parent = ScreenGui;
         });
 
@@ -3894,7 +3895,8 @@ do
                     BorderMode = Enum.BorderMode.Middle;
                     Size = UDim2.new(1, -1, 0, 20);
                     ZIndex = 23;
-                    Active = true,
+                    -- not Active: an Active row captures the finger, so a swipe on the list never scrolled it
+                    -- (live: 90 px swipe, canvas stayed at 0; with inactive rows it moved 90)
                     Parent = Scrolling;
                 });
                 Row.Button = Button;
@@ -4575,6 +4577,7 @@ Library.LayoutFile = nil;
 Library.Toggled = false;
 
 local SectionDragThreshold = 6;     -- px of mouse travel before a header press becomes a drag
+local SectionTouchHold = 0.35;      -- s a finger must rest on a header before the box can be dragged
 local SectionPlaceholder, SectionPlaceholderStroke;
 
 local function MousePoint()
@@ -4941,11 +4944,22 @@ local function SectionDropTarget(Section, Point)
     end;
 end;
 
-local function DragSection(Section)
-    local Start = MousePoint();
+local function DragSection(Section, Touch)
+    local Start, Began = MousePoint(), os.clock();
 
     while IsHeld() do
-        if (MousePoint() - Start).Magnitude >= SectionDragThreshold then
+        local Moved = (MousePoint() - Start).Magnitude >= SectionDragThreshold;
+
+        if Touch then
+            -- a finger holds still first; one that moves at once is scrolling and pulled the box out of the window
+            if Moved then
+                return;
+            end;
+
+            if os.clock() - Began >= SectionTouchHold then
+                break;
+            end;
+        elseif Moved then
             break;
         end;
 
@@ -5128,8 +5142,10 @@ function Library:RegisterSection(Info)
             return;
         end;
 
-        if (Mouse.Y - Section.Outer.AbsolutePosition.Y) / Library.UIScale <= Section.HeaderHeight then
-            DragSection(Section);
+        -- the press itself, not the shared Mouse position: a stale value above the box also passed "<= header"
+        local Y = (Input.Position.Y - Section.Outer.AbsolutePosition.Y) / Library.UIScale;
+        if Y >= 0 and Y <= Section.HeaderHeight then
+            DragSection(Section, Input.UserInputType == Enum.UserInputType.Touch);
         end;
     end);
 
