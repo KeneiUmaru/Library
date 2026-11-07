@@ -47,7 +47,7 @@ local STYLE_TOKENS = {
 	Modern = {
 		SidebarWidth = 200, SidebarPad = { 15, 19, 10, 10 }, CategoryGap = 10, CategoryHeaderHeight = 28, CategoryTextSize = 16,
 		TabHeight = 28, DrawerTabHeight = 36, TabTextSize = 14, Underline = true,
-		PagePad = { 8, 7, 9, 9 }, PagePadMobile = { 6, 5, 6, 6 },
+		PagePad = { 8, 8, 9, 9 }, PagePadMobile = { 6, 6, 6, 6 },
 		SectionGap = 10, SectionMin = 300, LoneMax = 720,
 		SectionPad = { 15, 14, 14, 14 }, SectionPadMobile = { 12, 12, 12, 12 },
 		SectionHeaderHeight = 20, SectionTitleSize = 18, SectionHeaderGap = 10, SectionCorner = 3, BorderThickness = 1, BorderTransparency = 0,
@@ -357,7 +357,7 @@ function Library:CreateWindow(opts)
 	local transitionsOn = opts.SectionTransitions ~= false
 	local tabAnimations = opts.TabAnimations ~= false
 	local tabSpeed = num(opts.TabAnimationSpeed) and math.clamp(opts.TabAnimationSpeed, 0.25, 4) or 1
-	local gridMax = num(opts.MaxSectionGridWidth) and math.max(240, opts.MaxSectionGridWidth) or 1040
+	local gridMax = num(opts.MaxSectionGridWidth) and math.max(240, opts.MaxSectionGridWidth) or 1400
 	local equalRows = opts.EqualRowHeight == true
 	local fitContent = opts.FitWindowToContent == true
 	local transitionSpeed = type(opts.SectionTransitionSpeed) == "number" and math.clamp(opts.SectionTransitionSpeed, 0.25, 4) or 1
