@@ -21,6 +21,7 @@
         Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Suffix, Format }) -- read-only thin bar, update with :SetValue(n)
         Groupbox:AddButton({ Text, Func, DoubleClick = true, ConfirmationTime = 3 }) -- second click confirms; otherwise resets
         Groupbox:AddLabel(text, wrap?, tooltip?)  -- compact help labels; :AddTooltip(text) also works
+        Groupbox:AddTagList({ OnRemove = function(id) end }) -- :SetItems({ { Id, Text }, ... }); removable rows
         Dropdown ValueTooltips = { [value] = description } -- or function(value); describes hovered options and selection
         Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
         Library:Notify(text, seconds?)            -- accent bar along the bottom counts the duration down (default 5s),
@@ -2342,6 +2343,89 @@ do
         Groupbox:Resize();
 
         return Label;
+    end;
+
+    -- A compact, dynamically updated list of removable labels. The owner keeps the data and handles removal.
+    function Funcs:AddTagList(Info)
+        Info = Info or {};
+        local Groupbox = self;
+        local Frame = Library:Create('Frame', {
+            BackgroundTransparency = 1;
+            Size = UDim2.new(1, -4, 0, 20);
+            ZIndex = 5;
+            Parent = Groupbox.Container;
+        });
+        local Layout = Library:Create('UIListLayout', {
+            Padding = UDim.new(0, 3);
+            SortOrder = Enum.SortOrder.LayoutOrder;
+            Parent = Frame;
+        });
+        local Tags = { Frame = Frame };
+        function Tags:SetItems(Items)
+            if Library:NeedsUIThread() then
+                return Library:RunOnUIThread(Tags.SetItems, Tags, Items);
+            end;
+            for _, Child in ipairs(Frame:GetChildren()) do
+                if Child ~= Layout then Child:Destroy(); end;
+            end;
+            local Count = 0;
+            for _, Item in ipairs(type(Items) == 'table' and Items or {}) do
+                Count = Count + 1;
+                local Row = Library:Create('Frame', {
+                    BackgroundColor3 = Library.MainColor;
+                    BorderColor3 = Library.OutlineColor;
+                    Size = UDim2.new(1, 0, 0, 23);
+                    LayoutOrder = Count;
+                    ZIndex = 6;
+                    Parent = Frame;
+                });
+                Library:AddToRegistry(Row, { BackgroundColor3 = 'MainColor'; BorderColor3 = 'OutlineColor'; });
+                Library:CreateLabel({
+                    BackgroundTransparency = 1;
+                    Position = UDim2.fromOffset(5, 0);
+                    Size = UDim2.new(1, -35, 1, 0);
+                    Text = tostring(Item.Text or Item.Id or '');
+                    TextSize = 13;
+                    TextXAlignment = Enum.TextXAlignment.Left;
+                    TextTruncate = Enum.TextTruncate.AtEnd;
+                    ZIndex = 7;
+                    Parent = Row;
+                });
+                local Remove = Library:Create('TextButton', {
+                    BackgroundTransparency = 1;
+                    Position = UDim2.new(1, -28, 0, 0);
+                    Size = UDim2.fromOffset(28, 23);
+                    Text = '×';
+                    TextSize = 18;
+                    Font = Library.Font;
+                    TextColor3 = Library.FontColor;
+                    ZIndex = 8;
+                    Parent = Row;
+                });
+                Library:AddToRegistry(Remove, { TextColor3 = 'FontColor'; });
+                Remove.Activated:Connect(function()
+                    if not Library:MouseIsOverOpenedFrame() and type(Info.OnRemove) == 'function' then
+                        Library:SafeCallback(Info.OnRemove, Item.Id);
+                    end;
+                end);
+            end;
+            if Count == 0 then
+                Library:CreateLabel({
+                    Size = UDim2.new(1, 0, 0, 20);
+                    Text = Info.EmptyText or 'No active tags';
+                    TextSize = 13;
+                    TextXAlignment = Enum.TextXAlignment.Left;
+                    ZIndex = 6;
+                    Parent = Frame;
+                });
+            end;
+            Frame.Size = UDim2.new(1, -4, 0, Count == 0 and 20 or Count * 26 - 3);
+            Groupbox:Resize();
+        end;
+        Tags:SetItems(Info.Items or {});
+        Groupbox:AddBlank(5);
+        Groupbox:Resize();
+        return Tags;
     end;
 
     function Funcs:AddButton(...)
