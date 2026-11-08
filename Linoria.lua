@@ -21,7 +21,7 @@
         Groupbox:AddProgressBar(idx, { Text, Default, Min, Max, Suffix, Format }) -- read-only thin bar, update with :SetValue(n)
         Groupbox:AddButton({ Text, Func, DoubleClick = true, ConfirmationTime = 3 }) -- second click confirms; otherwise resets
         Groupbox:AddLabel(text, wrap?, tooltip?)  -- compact help labels; :AddTooltip(text) also works
-        Groupbox:AddTagList({ OnRemove = function(id) end }) -- :SetItems({ { Id, Text }, ... }); removable rows
+        Groupbox:AddTagList({ OnRemove = function(id) end }) -- :SetItems({ { Id, Text, Detail? }, ... }); removable rows
         Dropdown ValueTooltips = { [value] = description } -- or function(value); describes hovered options and selection
         Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
         Library:Notify(text, seconds?)            -- accent bar along the bottom counts the duration down (default 5s),
@@ -2368,13 +2368,17 @@ do
             for _, Child in ipairs(Frame:GetChildren()) do
                 if Child ~= Layout then Child:Destroy(); end;
             end;
-            local Count = 0;
+            local Count, Height = 0, 0;
             for _, Item in ipairs(type(Items) == 'table' and Items or {}) do
                 Count = Count + 1;
+                -- optional Item.Detail goes on a dimmer second line so long rows are not cut to "..."
+                local Detail = Item.Detail ~= nil and tostring(Item.Detail) or nil;
+                local RowHeight = Detail and 36 or 23;
+                Height = Height + RowHeight + 3;
                 local Row = Library:Create('Frame', {
                     BackgroundColor3 = Library.MainColor;
                     BorderColor3 = Library.OutlineColor;
-                    Size = UDim2.new(1, 0, 0, 23);
+                    Size = UDim2.new(1, 0, 0, RowHeight);
                     LayoutOrder = Count;
                     ZIndex = 6;
                     Parent = Frame;
@@ -2382,8 +2386,8 @@ do
                 Library:AddToRegistry(Row, { BackgroundColor3 = 'MainColor'; BorderColor3 = 'OutlineColor'; });
                 Library:CreateLabel({
                     BackgroundTransparency = 1;
-                    Position = UDim2.fromOffset(5, 0);
-                    Size = UDim2.new(1, -35, 1, 0);
+                    Position = UDim2.fromOffset(5, Detail and 2 or 0);
+                    Size = UDim2.new(1, -35, 0, Detail and 17 or 23);
                     Text = tostring(Item.Text or Item.Id or '');
                     TextSize = 13;
                     TextXAlignment = Enum.TextXAlignment.Left;
@@ -2391,10 +2395,24 @@ do
                     ZIndex = 7;
                     Parent = Row;
                 });
+                if Detail then
+                    Library:CreateLabel({
+                        BackgroundTransparency = 1;
+                        Position = UDim2.fromOffset(5, 18);
+                        Size = UDim2.new(1, -35, 0, 16);
+                        Text = Detail;
+                        TextSize = 12;
+                        TextTransparency = 0.35;
+                        TextXAlignment = Enum.TextXAlignment.Left;
+                        TextTruncate = Enum.TextTruncate.AtEnd;
+                        ZIndex = 7;
+                        Parent = Row;
+                    });
+                end;
                 local Remove = Library:Create('TextButton', {
                     BackgroundTransparency = 1;
                     Position = UDim2.new(1, -28, 0, 0);
-                    Size = UDim2.fromOffset(28, 23);
+                    Size = UDim2.new(0, 28, 1, 0);
                     Text = '×';
                     TextSize = 18;
                     Font = Library.Font;
@@ -2419,7 +2437,7 @@ do
                     Parent = Frame;
                 });
             end;
-            Frame.Size = UDim2.new(1, -4, 0, Count == 0 and 20 or Count * 26 - 3);
+            Frame.Size = UDim2.new(1, -4, 0, Count == 0 and 20 or Height - 3);
             Groupbox:Resize();
         end;
         Tags:SetItems(Info.Items or {});
