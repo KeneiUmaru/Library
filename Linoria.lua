@@ -209,6 +209,7 @@ local RainbowStep = 0
 local Hue = 0
 local AccentPhase = 0
 local LastRainbowAccent = nil
+local LastAccentPaint = 0
 
 local function PingPong(X)
     X = X % 1;
@@ -268,9 +269,15 @@ table.insert(Library.Signals, RenderStepped:Connect(function(Delta)
             Library.AccentColorDark = Library:GetDarkerColor(Library.AccentColor);
             LastRainbowAccent = Library.AccentColor;
 
-            -- While the menu is hidden only the HUD pieces (watermark, keybind list, notifications) need recoloring.
-            local Hidden = Library.MainWindow and not Library.MainWindow.Visible;
-            Library:UpdateAccentColors(Hidden and Library.HudRegistry or nil);
+            -- Repainting walks the whole registry (every accent element of the window): 20 times a second looks the
+            -- same as 60 and costs a third. While the menu is hidden only the HUD pieces (watermark, keybind list,
+            -- notifications) need recoloring.
+            local Now = os.clock();
+            if Now - LastAccentPaint >= 0.05 then
+                LastAccentPaint = Now;
+                local Hidden = Library.MainWindow and not Library.MainWindow.Visible;
+                Library:UpdateAccentColors(Hidden and Library.HudRegistry or nil);
+            end;
         end
     end
 end))
@@ -2323,6 +2330,12 @@ do
         function Label:SetText(Text)
             if Library:NeedsUIThread() then
                 return Library:RunOnUIThread(Label.SetText, Label, Text);
+            end;
+
+            -- status labels are refreshed every few hundred ms with mostly the same text: skip the re-measure
+            -- and groupbox resize when nothing changed
+            if TextLabel.Text == Text then
+                return;
             end;
 
             TextLabel.Text = Text
@@ -6764,8 +6777,8 @@ local ThemeManager = {} do
 		-- built-in accent animation; a client that made its own toggles (kenya_client) keeps them
 		if not Toggles.RainbowAccent and not Toggles.GradientAccent then
 			groupbox:AddDivider()
-			groupbox:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = true })
-			groupbox:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = true, Tooltip = 'Spread the accent across the window instead of one flat color' })
+			groupbox:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = false })
+			groupbox:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = false, Tooltip = 'Spread the accent across the window instead of one flat color' })
 			local function ApplyAccentMode()
 				self.Library:SetRainbowAccent(Toggles.RainbowAccent.Value, Toggles.GradientAccent.Value)
 			end
@@ -6976,8 +6989,8 @@ local ThemeManager = {} do
 
 		local AccentGroup = tab:AddRightGroupbox('Accent')
 
-		AccentGroup:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = true, Tooltip = 'Rainbow: cycle the hue. Custom colors: flow them across the menu' })
-		AccentGroup:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = true, Tooltip = 'Spread the accent across the window instead of one flat color' })
+		AccentGroup:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = false, Tooltip = 'Rainbow: cycle the hue. Custom colors: flow them across the menu' })
+		AccentGroup:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = false, Tooltip = 'Spread the accent across the window instead of one flat color' })
 		AccentGroup:AddSlider('RainbowSpeed', { Text = 'Animation speed', Default = 1, Min = 0.1, Max = 5, Rounding = 1, Suffix = 'x', HideMax = true })
 
 		-- Gradient shape (only shown while the gradient is on)
