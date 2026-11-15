@@ -60,6 +60,7 @@ local Teams = game:GetService('Teams');
 local Players = game:GetService('Players');
 local RunService = game:GetService('RunService')
 local TweenService = game:GetService('TweenService');
+local GuiService = game:GetService('GuiService');
 local RenderStepped = RunService.RenderStepped;
 local LocalPlayer = Players.LocalPlayer;
 local PlayerMouse = LocalPlayer:GetMouse();
@@ -179,7 +180,8 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 13;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 14;         -- bump when the public API changes; clients check this against the GitHub copy
+                          -- 14: AddSlider Info.Format(Value) -> display text
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -591,8 +593,14 @@ function Library:MakeDraggable(Instance, Cutoff, Ghostable)
         return math.max(Scale, 0.001);
     end;
 
+    -- PlayerMouse stops updating while the Roblox ESC menu is open; GetMouseLocation does not (only deltas are used).
+    local function Cursor()
+        if LastTouch then return Vector2.new(LastTouch.X, LastTouch.Y); end;
+        return InputService:GetMouseLocation();
+    end;
+
     local function Update()
-        local Point = Vector2.new(Mouse.X, Mouse.Y);
+        local Point = Cursor();
         local X, Y = (Point.X - StartMouse.X) / ParentScale, (Point.Y - StartMouse.Y) / ParentScale;
         if X ~= 0 or Y ~= 0 then Moved = true; end;
         -- Preserve scale coordinates and anchors; only add the cursor delta.
@@ -640,18 +648,30 @@ function Library:MakeDraggable(Instance, Cutoff, Ghostable)
 
     local function Step()
         if not Instance.Parent then Stop(false); return; end;
-        if not IsHeld() then Stop(true); return; end;
+        -- shortcut: IsMouseButtonPressed is unverified while the ESC menu is open, so rely on InputEnded there.
+        if not GuiService.MenuIsOpen and not IsHeld() then Stop(true); return; end;
         Update();
     end;
 
-    Instance.InputBegan:Connect(function(Input)
+    local function Shown()
+        local Node = Instance;
+        while Node and Node:IsA('GuiObject') do
+            if not Node.Visible then return false; end;
+            Node = Node.Parent;
+        end;
+        return Node ~= nil and (not Node:IsA('LayerCollector') or Node.Enabled);
+    end;
+
+    local function Begin(Input, HitTest)
         if not IsClick(Input) or Dragging then return; end;
+        local Pos, Abs, Size = Input.Position, Instance.AbsolutePosition, Instance.AbsoluteSize;
+        if HitTest and (not Shown() or Pos.X < Abs.X or Pos.X > Abs.X + Size.X) then return; end;
         ParentScale = GetParentScale();
         local OwnScale = Instance:FindFirstChildOfClass('UIScale');
         local HeaderScale = ParentScale * (OwnScale and OwnScale.Scale or 1);
-        local HeaderY = Mouse.Y - Instance.AbsolutePosition.Y;
+        local HeaderY = Pos.Y - Abs.Y;
         if HeaderY < 0 or HeaderY > (Cutoff or 40) * HeaderScale then return; end;
-        StartMouse, StartPosition = Vector2.new(Mouse.X, Mouse.Y), Instance.Position;
+        StartMouse, StartPosition = Cursor(), Instance.Position;
         Dragging, Moved = true, false;
         Light = Ghostable == true and Library.LightDrag ~= false;
         if Light then ShowGhost(); end;
@@ -659,7 +679,14 @@ function Library:MakeDraggable(Instance, Cutoff, Ghostable)
         RunService:BindToRenderStep(Binding, Enum.RenderPriority.Input.Value + 1, function()
             Library:RunOnUIThread(Step);
         end);
+    end;
+
+    Instance.InputBegan:Connect(function(Input) Begin(Input, false); end);
+    -- The ESC menu sinks GUI input, so Instance.InputBegan never fires while it is open; hit-test by hand instead.
+    local MenuConnection = InputService.InputBegan:Connect(function(Input)
+        if GuiService.MenuIsOpen then Library:RunOnUIThread(Begin, Input, true); end;
     end);
+    Library:GiveSignal(MenuConnection);
     local EndConnection = InputService.InputEnded:Connect(function(Input)
         if IsClick(Input) then Library:RunOnUIThread(Stop, true); end;
     end);
@@ -668,6 +695,7 @@ function Library:MakeDraggable(Instance, Cutoff, Ghostable)
     Library:GiveSignal(FocusConnection);
     Instance.Destroying:Connect(function()
         Stop(false);
+        MenuConnection:Disconnect();
         EndConnection:Disconnect();
         FocusConnection:Disconnect();
         if Ghost then Ghost:Destroy(); end;
@@ -967,8 +995,8 @@ function Library:Unload()
     end
 
      -- Call our unload callback, maybe to undo some hooks etc
-    if Library.OnUnload then
-        Library.OnUnload()
+    if Library.UnloadCallback then
+        Library.UnloadCallback()
     end
 
     ScreenGui:Destroy()
@@ -978,8 +1006,11 @@ function Library:Unload()
     end
 end
 
+-- Kept in its own field: storing it in Library.OnUnload replaced this method, and an Unload before any callback was
+-- registered (a re-run tearing down a run still building its UI) called the method itself, which set it to nil and
+-- made that run's later Library:OnUnload(...) fail with "missing method 'OnUnload'".
 function Library:OnUnload(Callback)
-    Library.OnUnload = Callback
+    Library.UnloadCallback = Callback
 end
 
 Library:GiveSignal(ScreenGui.DescendantRemoving:Connect(function(Instance)
@@ -3300,10 +3331,13 @@ do
         function Slider:Display()
             local Suffix = Info.Suffix or '';
 
+            -- Info.Format(Value) -> text, for values that mean something special (e.g. "Default" at the minimum)
+            local Shown = Info.Format and tostring(Info.Format(Slider.Value)) or nil;
+
             if Info.Compact then
-                DisplayLabel.Text = Info.Text .. ': ' .. Slider.Value .. Suffix
-            elseif Info.HideMax then
-                DisplayLabel.Text = string.format('%s', Slider.Value .. Suffix)
+                DisplayLabel.Text = Info.Text .. ': ' .. (Shown or (Slider.Value .. Suffix))
+            elseif Info.HideMax or Shown then
+                DisplayLabel.Text = Shown or string.format('%s', Slider.Value .. Suffix)
             else
                 DisplayLabel.Text = string.format('%s/%s', Slider.Value .. Suffix, Slider.Max .. Suffix);
             end
@@ -4368,7 +4402,10 @@ do
                 local Elem = Dependency[1];
                 local Value = Dependency[2];
 
-                if Elem.Type == 'Toggle' and Elem.Value ~= Value then
+                -- a function element is a computed condition (e.g. "toggle A or toggle B"); re-read on every update
+                local Current = type(Elem) == 'function' and Elem() or (type(Elem) == 'table' and Elem.Type == 'Toggle' and Elem.Value);
+
+                if (type(Elem) == 'function' or Elem.Type == 'Toggle') and Current ~= Value then
                     Holder.Visible = false;
                     Depbox:Resize();
                     return;
@@ -7028,7 +7065,14 @@ local ThemeManager = {} do
 
 		AccentGroup:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = false, Tooltip = 'Rainbow: cycle the hue. Custom colors: flow them across the menu' })
 		AccentGroup:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = false, Tooltip = 'Spread the accent across the window instead of one flat color' })
-		AccentGroup:AddSlider('RainbowSpeed', { Text = 'Animation speed', Default = 1, Min = 0.1, Max = 5, Rounding = 1, Suffix = 'x', HideMax = true })
+
+		-- Everything below only does something while the accent animates or spreads; with both off it is one flat
+		-- theme color, so the controls stay hidden instead of looking broken.
+		local DynamicBox = AccentGroup:AddDependencyBox()
+		AccentGroup = DynamicBox
+		local SpeedBox = AccentGroup:AddDependencyBox()
+		SpeedBox:AddSlider('RainbowSpeed', { Text = 'Animation speed', Default = 1, Min = 0.1, Max = 5, Rounding = 1, Suffix = 'x', HideMax = true })
+		SpeedBox:SetupDependencies({ { Toggles.RainbowAccent, true } })
 
 		-- Gradient shape (only shown while the gradient is on)
 		local GradientBox = AccentGroup:AddDependencyBox()
@@ -7054,6 +7098,7 @@ local ThemeManager = {} do
 		RainbowBox:AddSlider('RainbowSaturation', { Text = 'Rainbow saturation', Default = 80, Min = 0, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
 		RainbowBox:AddSlider('RainbowBrightness', { Text = 'Rainbow brightness', Default = 100, Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
 		RainbowBox:SetupDependencies({ { Toggles.CustomGradientColors, false } })
+		DynamicBox:SetupDependencies({ { function() return Toggles.RainbowAccent.Value or Toggles.GradientAccent.Value end, true } })
 
 		local function ApplyAccentMode()
 		    Library:SetRainbowAccent(Toggles.RainbowAccent.Value, Toggles.GradientAccent.Value)
