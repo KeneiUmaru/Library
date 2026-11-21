@@ -22,7 +22,10 @@
         Groupbox:AddButton({ Text, Func, DoubleClick = true, ConfirmationTime = 3 }) -- second click confirms; otherwise resets
         Groupbox:AddLabel(text, wrap?, tooltip?)  -- compact help labels; :AddTooltip(text) also works
         Groupbox:AddTagList({ OnRemove = function(id) end }) -- :SetItems({ { Id, Text, Detail? }, ... }); removable rows
+        Groupbox:AddIconLabel(text)               -- :SetRows({ { Text, Icon?, Color? }, ... }); one line per row, an
+                                                  -- icon (ImageLabel to copy, or a Model shown in 3D) in front of it
         Dropdown ValueTooltips = { [value] = description } -- or function(value); describes hovered options and selection
+        Dropdown ValueIcons = { [value] = image }  -- or function(value) -> image id; an icon in front of each option
         Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
         Library:Notify(text, seconds?)            -- accent bar along the bottom counts the duration down (default 5s),
                                                   -- then it fades out
@@ -181,8 +184,10 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 14;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 16;         -- bump when the public API changes; clients check this against the GitHub copy
                           -- 14: AddSlider Info.Format(Value) -> display text
+                          -- 15: AddDropdown Info.ValueIcons
+                          -- 16: Groupbox:AddIconLabel
     UIScale = 1;          -- window + popup scale, see Library:SetScale
     Popups = {};          -- dropdown lists / color pickers / menus parented to the ScreenGui, scaled with the window
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
@@ -2652,6 +2657,108 @@ do
         return Label;
     end;
 
+    -- A label whose lines can each carry an icon and a colour. IconLabel:SetRows(Rows), Rows = { { Text = 'Chest x1',
+    -- Icon = <ImageLabel to copy the image from, a Model to show in 3D, or nil>, Color = <Color3 or nil> }, ... }:
+    -- one line per row, the icon in front of it. Safe from game callbacks; unchanged rows are not laid out again.
+    function Funcs:AddIconLabel(Text)
+        local Groupbox = self;
+        local Object = Groupbox:AddLabel(Text, true).TextLabel;
+        local Padding = Library:Create('UIPadding', { Parent = Object });
+        local Images, Shown = {}, nil;
+        local IconLabel = { TextLabel = Object };
+
+        local function Apply(Rows, Indent)
+            -- each row is measured on its own, so a row that wraps still leaves the next icon on its line
+            local Lines, Y, Width = {}, 0, math.max(Object.AbsoluteSize.X - Indent, 50);
+            Padding.PaddingLeft = UDim.new(0, Indent);
+
+            for Index, Row in ipairs(Rows) do
+                Lines[Index] = Row.Text;
+
+                if Row.Color then
+                    Object.RichText = true;
+                    Lines[Index] = '<font color="#' .. Row.Color:ToHex() .. '">'
+                        .. Row.Text:gsub('[&<]', { ['&'] = '&amp;', ['<'] = '&lt;' }) .. '</font>';
+                end;
+
+                local Image, IsModel = Images[Index], Row.Icon ~= nil and Row.Icon:IsA('Model');
+
+                if Image and Row.Icon and Image:IsA('ViewportFrame') ~= IsModel then
+                    Image:Destroy(); -- this line changed between an image and a 3D item
+                    Image = nil;
+                end;
+
+                if Row.Icon and not Image then
+                    Image = Library:Create(IsModel and 'ViewportFrame' or 'ImageLabel', {
+                        BackgroundTransparency = 1;
+                        Size = UDim2.fromOffset(14, 14);
+                        ZIndex = 6;
+                        Parent = Object;
+                    });
+                    Images[Index] = Image;
+                end;
+
+                if Image then
+                    Image.Visible = Row.Icon ~= nil;
+
+                    if Row.Icon then
+                        Image.Position = UDim2.fromOffset(-Indent, Y); -- in the padding, left of the text
+
+                        if not IsModel then
+                            -- the image only: some game icons carry an ImageRectSize that crops them to an empty corner
+                            Image.Image = Row.Icon.Image;
+                        elseif Image.Name ~= Row.Icon.Name then
+                            Image.Name = Row.Icon.Name;
+                            Image:ClearAllChildren();
+                            local Clone = Row.Icon:Clone();
+                            Clone.Parent = Image;
+                            -- the camera looks at the model's front from far enough to fit its bounding box
+                            local Pivot, Extents = Clone:GetBoundingBox();
+                            Image.Ambient = Color3.new(1, 1, 1);
+                            Image.CurrentCamera = Library:Create('Camera', {
+                                FieldOfView = 30;
+                                CFrame = CFrame.lookAt(Pivot.Position + Vector3.new(0, 0, Extents.Magnitude * 1.4), Pivot.Position);
+                                Parent = Image;
+                            });
+                        end;
+                    end;
+                end;
+
+                Y = Y + select(2, Library:GetTextBounds(Row.Text, Library.Font, 14, Vector2.new(Width, math.huge)));
+            end;
+
+            for Index, Image in pairs(Images) do
+                if Index > #Rows then
+                    Image.Visible = false;
+                end;
+            end;
+
+            Object.Text = table.concat(Lines, '\n');
+            Object.Size = UDim2.new(1, -4, 0, Y);
+            Groupbox:Resize();
+        end;
+
+        function IconLabel:SetRows(Rows)
+            local Parts, Indent = {}, 0;
+
+            for Index, Row in ipairs(Rows) do
+                local Icon = Row.Icon and (Row.Icon:IsA('Model') and Row.Icon.Name or Row.Icon.Image) or '';
+                Parts[Index] = Row.Text .. '\0' .. Icon .. '\0' .. (Row.Color and Row.Color:ToHex() or '');
+                Indent = Row.Icon and 18 or Indent;
+            end;
+
+            -- the width is part of the key: rows measured before the label had its real width are laid out again
+            local Key = Object.AbsoluteSize.X .. '\n' .. table.concat(Parts, '\n');
+
+            if Key ~= Shown then -- callers refresh every second or so with mostly the same rows
+                Shown = Key;
+                Library:RunOnUIThread(Apply, Rows, Indent);
+            end;
+        end;
+
+        return IconLabel;
+    end;
+
     -- A compact, dynamically updated list of removable labels. The owner keeps the data and handles removal.
     function Funcs:AddTagList(Info)
         Info = Info or {};
@@ -3884,6 +3991,16 @@ do
             SpecialType = Info.SpecialType; -- can be either 'Player' or 'Team'
             Callback = Info.Callback or function(Value) end;
         };
+        -- Info.ValueIcons: the image id shown in front of an option ('' or nil = none).
+        function Dropdown:GetValueIcon(Value)
+            local Icons = Info.ValueIcons;
+            if Value == nil then return '' end;
+            if type(Icons) == 'function' then
+                local Ok, Image = pcall(Icons, Value);
+                return Ok and type(Image) == 'string' and Image or '';
+            end;
+            return type(Icons) == 'table' and type(Icons[Value]) == 'string' and Icons[Value] or '';
+        end;
         function Dropdown:GetValueTooltip(Value)
             if Value == nil then return nil end;
             local Descriptions = Info.ValueTooltips;
@@ -4318,12 +4435,23 @@ do
                     BorderColor3 = 'OutlineColor';
                 });
 
+                -- ValueIcons: a 16px icon in front of the name, which moves right to make room
+                Row.Icon = Info.ValueIcons and Library:Create('ImageLabel', {
+                    AnchorPoint = Vector2.new(0, 0.5);
+                    BackgroundTransparency = 1;
+                    Position = UDim2.new(0, 5, 0.5, 0);
+                    Size = UDim2.fromOffset(16, 16);
+                    ScaleType = Enum.ScaleType.Fit;
+                    ZIndex = 25;
+                    Parent = Button;
+                });
+
                 local ButtonClip = Library:Create('Frame', {
                     BackgroundTransparency = 1;
                     BorderSizePixel = 0;
                     ClipsDescendants = true;
-                    Position = UDim2.new(0, 6, 0, 0);
-                    Size = UDim2.new(1, -12, 1, 0);
+                    Position = UDim2.new(0, Row.Icon and 25 or 6, 0, 0);
+                    Size = UDim2.new(1, Row.Icon and -31 or -12, 1, 0);
                     ZIndex = 25;
                     Parent = Button;
                 });
@@ -4409,6 +4537,9 @@ do
                     Row.Scroller:Stop();
                     Row.Value = Value;
                     Row.Label.Text = Value or '';
+                    if Row.Icon then
+                        Row.Icon.Image = Dropdown:GetValueIcon(Value);
+                    end;
                 end;
                 Row.Button.Position = UDim2.fromOffset(0, (ValueIndex - 1) * 20);
                 if Value == nil then
@@ -5700,6 +5831,9 @@ function Library:CreateWindow(...)
     local TAB_SHADE = 0.4;
     local TAB_HEIGHT, TAB_PADDING = 26, 12; -- VS Code proportions: room above / below and either side of the name
     local TAB_RADIUS = 5;                   -- corners of the outline around the active tab
+    -- Title bar. On glass the box under it is clear, so the title is centred between the window's top edge and the
+    -- tab bar 8px further down: 10px above and below the text, as in VS Code's title bar.
+    local TITLE_HEIGHT = 28;
 
     -- 1px outline pieces of the tab bar and content box. On glass the theme's outline color sinks into the blurred
     -- scene behind it, so it is lifted toward the font color (as the off toggle boxes are).
@@ -5726,7 +5860,7 @@ function Library:CreateWindow(...)
         Parent = ScreenGui;
     });
 
-    Library:MakeDraggable(Outer, 25, true);
+    Library:MakeDraggable(Outer, TITLE_HEIGHT, true);
 
     -- NieR-style resize grip: a triangle of 2px accent dots in the bottom-right corner, faint at rest and solid on
     -- hover / while dragging. Drag it (mouse or finger) to resize; the top-left corner stays put.
@@ -5849,7 +5983,7 @@ function Library:CreateWindow(...)
 
     local WindowLabel = Library:CreateLabel({
         Position = UDim2.new(0.5, 0, 0, 0);
-        Size = UDim2.new(0, 0, 0, 25);
+        Size = UDim2.new(0, 0, 0, TITLE_HEIGHT + (Glass and 8 or 0));
         Text = Config.Title or '';
         TextXAlignment = Enum.TextXAlignment.Center;
         ZIndex = 1;
@@ -5859,8 +5993,8 @@ function Library:CreateWindow(...)
     local MainSectionOuter = Library:Create('Frame', {
         BackgroundColor3 = Library.BackgroundColor;
         BorderColor3 = Library.OutlineColor;
-        Position = UDim2.new(0, 8, 0, 25);
-        Size = UDim2.new(1, -16, 1, -33);
+        Position = UDim2.new(0, 8, 0, TITLE_HEIGHT);
+        Size = UDim2.new(1, -16, 1, -(TITLE_HEIGHT + 8));
         ZIndex = 1;
         Parent = Inner;
     });
@@ -6301,12 +6435,30 @@ function Library:CreateWindow(...)
 
         -- Switching tabs (Library.Animations): the new content slides in from the side of the tab that was clicked
         -- (a tab to the right comes in from the right) while fading in, and the old one slides out the other way
-        -- fading out. Tab.FadeRest holds the old tab's real transparencies until it is out of sight.
+        -- fading out. Tab.FadeRest holds a tab's real transparencies for as long as either fade runs on it. A fade that
+        -- starts without them takes whatever the content shows at that moment for real, and a tab caught half faded
+        -- (clicked through quickly, or while the menu itself fades) stayed faded for good.
         local SLIDE_PX, SLIDE_TIME = 40, 0.22;
+
+        -- Ends this tab's slide at once, its content back at its real transparencies (Library:Toggle reads them).
+        function Tab:EndSlide()
+            if Tab.FadeRest then
+                Tab.FadeToken = {};
+                Library:RestoreTree(Tab.FadeRest);
+                Tab.FadeRest = nil;
+                TabFrame.Visible = TabActive;
+            end;
+        end;
 
         function Tab:ShowTab()
             local Previous = Window.ActiveTab;
             local Direction = (Previous and Previous ~= Tab) and (Tab.Index > Previous.Index and 1 or -1) or 0;
+
+            -- only a window at rest slides: hidden, or mid open / close fade, its content is not at its real values
+            if not Outer.Visible or Window.Fading then
+                Direction = 0;
+            end;
+
             Window.SlideDirection = Direction;
 
             for _, Other in next, Window.Tabs do
@@ -6320,19 +6472,25 @@ function Library:CreateWindow(...)
             FadeTabLabel(0);
             Window:MoveUnderline(Previous == nil); -- slides from the previous tab; the first one just appears
 
-            Tab.FadeToken = {}; -- cancels this tab's own unfinished hide
+            local Token = {};
+            Tab.FadeToken = Token; -- cancels this tab's own unfinished hide
             TabFrame.Visible = true;
 
             if Library.Animations and Direction ~= 0 then
                 TabFrame.Position = UDim2.fromOffset(Direction * SLIDE_PX, 0);
-                Library:FadeTree(TabFrame, true, SLIDE_TIME, Tab.FadeRest);
+                Tab.FadeRest = Library:FadeTree(TabFrame, true, SLIDE_TIME, Tab.FadeRest);
                 Library:Animate(TabFrame, SLIDE_TIME, { Position = UDim2.new() });
+
+                task.delay(SLIDE_TIME + 0.02, function()
+                    if Tab.FadeToken == Token then
+                        Tab.FadeRest = nil; -- faded in: from here the content's own values are the real ones
+                    end;
+                end);
             else
                 Library:RestoreTree(Tab.FadeRest);
+                Tab.FadeRest = nil;
                 TabFrame.Position = UDim2.new();
             end;
-
-            Tab.FadeRest = nil;
         end;
 
         function Tab:HideTab()
@@ -7045,10 +7203,16 @@ function Library:CreateWindow(...)
 
         local FromHidden = not Outer.Visible;
 
+        -- a tab still sliding is mid fade: ended first, so the real transparencies are what is cached and faded from
+        for _, Tab in next, Window.Tabs do
+            Tab:EndSlide();
+        end;
+
         -- Hiding from a fully shown menu: re-read every element's current transparency so values that
         -- changed while it was open (e.g. the tab underline) are what gets restored on the next show.
         local RefreshCache = (not Toggled) and FadeComplete and Outer.Visible;
         FadeComplete = false;
+        Window.Fading = true; -- tabs switch without their slide meanwhile (Tab:ShowTab)
 
         if Toggled then
             Outer.Visible = true;
@@ -7115,6 +7279,7 @@ function Library:CreateWindow(...)
 
             Outer.Visible = Toggled;
             FadeComplete = true;
+            Window.Fading = false;
         end);
     end
 
