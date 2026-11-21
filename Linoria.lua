@@ -190,7 +190,7 @@ local Library = {
     MenuFadeTime = nil;   -- overrides the window's MenuFadeTime when set (seconds)
     GlassTransparency = 0.2;  -- frosted glass: how see-through the window / sections are, with the game blurred
                           -- behind them only (0 = off, solid window). Set before CreateWindow.
-    BlurBillboards = true;    -- also blur the game's name tags / damage numbers while a glass frame is shown
+    BlurBillboards = true;    -- also blur the game's name tags / damage numbers behind a glass frame
     Animations = true;    -- eased UI changes (see Library:CreateTween); false makes everything snap
     LightDrag = true;     -- drag the main window as an outline, move it on release (see Library:MakeDraggable)
 
@@ -995,7 +995,8 @@ end
 -- write depth, so a near-invisible Glass part held 1 stud in front of the camera blurs exactly the screen rectangle
 -- it covers. Shown() returns (frame is on screen, blur wanted): the blur eases out while a closing menu still fades.
 local GlassFrames = {};
-local GLASS_DEPTH = 1;
+local GLASS_DEPTH = 1.5;       -- studs from the camera; the blur's focus range starts at 2.5 (NewBlur)
+local BILLBOARD_DEPTH = 1.1;   -- where blurred billboards are held: Roblox draws none nearer than 0.8 studs
 
 -- A game can destroy either one at any time (a map load clears Lighting, a respawn replaces the camera), and a
 -- destroyed instance cannot be parented again: UpdateGlass then makes a fresh one.
@@ -1003,7 +1004,7 @@ local function NewBlur(NearIntensity)
     local Blur = Instance.new('DepthOfFieldEffect');
     Blur.Name = 'LinoriaBlur';
     Blur.FarIntensity = 0;
-    Blur.FocusDistance = 51.6;
+    Blur.FocusDistance = 52.5;
     Blur.InFocusRadius = 50;
     Blur.NearIntensity = NearIntensity;
     Blur.Parent = game:GetService('Lighting');
@@ -1023,16 +1024,94 @@ local function NewGlassPart()
     return Part;
 end;
 
--- BillboardGuis drawn AlwaysOnTop (name tags, health bars, damage numbers) go on screen after the post effects, so
--- they stayed sharp through the glass. While a glass frame is shown they are moved into the 3D pass, where the blur
--- reaches them, and put back after. For that time walls and characters can cover them (Library.BlurBillboards).
+-- Blurring the game's billboards (name tags, health bars, damage numbers) through the glass. Drawn AlwaysOnTop they
+-- go on screen after the post effects and stay sharp. In the 3D pass the blur does reach them, but one behind the
+-- Glass part is not drawn at all. So while a glass frame is shown (Library.BlurBillboards) each AlwaysOnTop billboard
+-- is moved into the 3D pass and held BILLBOARD_DEPTH studs from the camera, in front of the glass: it is re-adorned
+-- to a proxy part on the line from the camera to its real adornee, with the proxy's size and the billboard's stud
+-- offsets and stud size all scaled by the same factor, which leaves it exactly where and as large as it was on
+-- screen. Over a glass frame it then blurs with the scene; anywhere else it looks as before. All tested live with
+-- own billboards, 2026-11-21.
 -- (A plain table: with weak keys the entries of live GUIs were collected, and those were never put back.)
-local Billboards, BillboardSignals, BillboardsOn = {}, {}, false;
+local Billboards, BillboardSignals, BillboardsOn = {}, {}, false; -- [Gui] = what the game set + what was written
 
-local function FlipBillboard(Gui)
-    if Gui:IsA('BillboardGui') and Gui.AlwaysOnTop then
+local function TrackBillboard(Gui)
+    if Gui:IsA('BillboardGui') and Gui.AlwaysOnTop and not Billboards[Gui] then
         Gui.AlwaysOnTop = false;
-        Billboards[Gui] = true;
+        Billboards[Gui] = {};
+    end;
+end;
+
+local function ReleaseBillboard(Gui, Data)
+    Billboards[Gui] = nil;
+
+    if Gui.Parent then
+        if Data.Size then
+            Gui.Adornee = Data.Adornee;
+            Gui.StudsOffset = Data.Offset;
+            Gui.StudsOffsetWorldSpace = Data.World;
+            Gui.Size = Data.Size;
+        end;
+
+        Gui.AlwaysOnTop = true;
+    end;
+
+    if Data.Proxy then
+        Data.Proxy:Destroy();
+    end;
+end;
+
+-- Every frame, after the camera has moved (UpdateGlass).
+local function HoldBillboards(Camera)
+    local Eye = Camera.CFrame;
+
+    for Gui, Data in next, Billboards do
+        -- whatever is not what was written last frame is the game's own (new) value
+        if Gui.Adornee ~= Data.Proxy then Data.Adornee = Gui.Adornee; end;
+        if Gui.StudsOffset ~= Data.SetOffset then Data.Offset = Gui.StudsOffset; end;
+        if Gui.StudsOffsetWorldSpace ~= Data.SetWorld then Data.World = Gui.StudsOffsetWorldSpace; end;
+        if Gui.Size ~= Data.SetSize then Data.Size = Gui.Size; end;
+
+        local Target = Data.Adornee or Gui.Parent;
+        local Place = Target and (Target:IsA('BasePart') and Target.CFrame or Target:IsA('Attachment') and Target.WorldCFrame);
+
+        if not (Gui.Parent and Place) then -- destroyed, or adorned to something this cannot follow
+            ReleaseBillboard(Gui, Data);
+            continue;
+        end;
+
+        -- the billboard's own depth, near enough: its adornee's, moved by the two stud offsets
+        local Depth = -Eye:PointToObjectSpace(Place.Position + Place:VectorToWorldSpace(Data.World)).Z - Data.Offset.Z;
+        local Scale = Depth > GLASS_DEPTH and BILLBOARD_DEPTH / Depth or 1; -- already in front of the glass: as is
+
+        if (Place.Position - Eye.Position).Magnitude > Gui.MaxDistance then
+            Scale = 1; -- too far to be shown: left at its real distance, where Roblox hides it itself
+        end;
+
+        if not Data.Proxy or Data.Proxy.Parent ~= Camera then -- first frame, or it went with a replaced camera
+            if Data.Proxy then
+                Data.Proxy:Destroy();
+            end;
+
+            Data.Proxy = Instance.new('Part');
+            Data.Proxy.Anchored = true;
+            Data.Proxy.CanCollide = false;
+            Data.Proxy.CanQuery = false;
+            Data.Proxy.CanTouch = false;
+            Data.Proxy.CastShadow = false;
+            Data.Proxy.Transparency = 1;
+            Data.Proxy.Parent = Camera;
+        end;
+
+        Data.Proxy.Size = (Target:IsA('BasePart') and Target.Size or Vector3.zero) * Scale;
+        Data.Proxy.CFrame = Place.Rotation + Eye.Position + (Place.Position - Eye.Position) * Scale;
+
+        Gui.Adornee = Data.Proxy;
+        Gui.StudsOffset = Data.Offset * Scale;
+        Gui.StudsOffsetWorldSpace = Data.World * Scale;
+        Gui.Size = UDim2.new(Data.Size.X.Scale * Scale, Data.Size.X.Offset, Data.Size.Y.Scale * Scale, Data.Size.Y.Offset);
+        -- read back, so next frame's comparison is against exactly what the property holds
+        Data.SetOffset, Data.SetWorld, Data.SetSize = Gui.StudsOffset, Gui.StudsOffsetWorldSpace, Gui.Size;
     end;
 end;
 
@@ -1042,10 +1121,10 @@ local function SetBillboardBlur(On)
     if On then
         for _, Root in next, { workspace, LocalPlayer:FindFirstChildOfClass('PlayerGui') } do
             for _, Gui in next, Root:GetDescendants() do
-                FlipBillboard(Gui);
+                TrackBillboard(Gui);
             end;
 
-            table.insert(BillboardSignals, Root.DescendantAdded:Connect(FlipBillboard)); -- ones made meanwhile
+            table.insert(BillboardSignals, Root.DescendantAdded:Connect(TrackBillboard)); -- ones made meanwhile
         end;
 
         return;
@@ -1056,12 +1135,9 @@ local function SetBillboardBlur(On)
     end;
     table.clear(BillboardSignals);
 
-    for Gui in next, Billboards do
-        if Gui.Parent then
-            Gui.AlwaysOnTop = true;
-        end;
+    for Gui, Data in next, Billboards do
+        ReleaseBillboard(Gui, Data);
     end;
-    table.clear(Billboards);
 end;
 
 local function UpdateGlass(Delta)
@@ -1104,8 +1180,12 @@ local function UpdateGlass(Delta)
     Blur.NearIntensity = math.clamp(Blur.NearIntensity + (Wanted and Delta or -Delta) / 0.2, 0, 1);
     Blur.Enabled = Blur.NearIntensity > 0;
 
-    if (Wanted and Library.BlurBillboards == true) ~= BillboardsOn then
+    if (Wanted and Library.BlurBillboards == true and Camera ~= nil) ~= BillboardsOn then
         SetBillboardBlur(not BillboardsOn);
+    end;
+
+    if BillboardsOn then
+        HoldBillboards(Camera);
     end;
 end;
 
@@ -7396,7 +7476,7 @@ local ThemeManager = {} do
 		if Library.Blur then -- frosted glass windows only: a script that set GlassTransparency = 0 keeps its solid menu
 			MenuGroup:AddSlider('MenuOpacity', { Text = 'Menu opacity', Default = math.floor((1 - Library.GlassTransparency) * 100 + 0.5), Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true, Tooltip = 'How solid the menu background is. Lower shows more of the blurred game behind it; 100% is solid and turns the blur off' })
 			Options.MenuOpacity:OnChanged(function(Value) Library:SetGlassTransparency(1 - Value / 100) end)
-			MenuGroup:AddToggle('BlurBillboards', { Text = 'Blur name tags', Default = true, Tooltip = 'While the menu is open, the game\'s name tags, health bars and damage numbers blur with the scene behind it. Until it closes, walls and characters can cover them. Does nothing when the blur itself is not drawn (low graphics)', Callback = function(Value) Library.BlurBillboards = Value end })
+			MenuGroup:AddToggle('BlurBillboards', { Text = 'Blur name tags', Default = true, Tooltip = 'While the menu is open, the game\'s name tags, health bars and damage numbers behind it blur with the scene. Off: they show sharp through the menu', Callback = function(Value) Library.BlurBillboards = Value end })
 		end
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
