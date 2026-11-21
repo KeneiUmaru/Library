@@ -5814,7 +5814,6 @@ function Library:CreateWindow(...)
         MainSectionOuter.BackgroundTransparency = 1;
         MainSectionInner.BackgroundTransparency = 1;
         TabContainer.BackgroundTransparency = 1;
-        Library:Create('UICorner', { CornerRadius = UDim.new(0, 8); Parent = Inner }); -- the border stroke follows it
 
         Library:AddGlass(Outer, function()
             return Outer.Visible, Library.Toggled;
