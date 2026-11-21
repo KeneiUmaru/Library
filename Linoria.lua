@@ -101,6 +101,11 @@ end;
 local TouchStart = {}; -- touch -> where it first went down (set by the InputBegan signal below)
 local TAP_SLOP = 10;
 local FINGER_CLEARANCE = 48; -- px between a touch and its tooltip, so the fingertip does not cover the text
+-- Long press. A finger must rest this long on something before it shows its tooltip or picks a section up to drag:
+-- shorter, and both kept going off under taps and scrolling swipes. Once a hold has done that, lifting the finger
+-- is no longer a tap (reading a toggle's tooltip must not switch the toggle).
+local TOUCH_HOLD = 1;
+local LongPressed = {}; -- touch -> true
 
 local function IsTap(Input)
     if Input.UserInputType ~= Enum.UserInputType.Touch then
@@ -111,13 +116,14 @@ local function IsTap(Input)
     local Start = TouchStart[Input] or Input.Position;
 
     while Input.UserInputState == Enum.UserInputState.Begin or Input.UserInputState == Enum.UserInputState.Change do
-        if (Input.Position - Start).Magnitude > TAP_SLOP then
+        if (Input.Position - Start).Magnitude > TAP_SLOP or LongPressed[Input] then
             return false;
         end;
         RenderStepped:Wait();
     end;
 
-    return Input.UserInputState == Enum.UserInputState.End and (Input.Position - Start).Magnitude <= TAP_SLOP;
+    return Input.UserInputState == Enum.UserInputState.End and (Input.Position - Start).Magnitude <= TAP_SLOP
+        and not LongPressed[Input];
 end;
 
 local ProtectGui = protectgui or (syn and syn.protect_gui) or (function() end);
@@ -193,7 +199,7 @@ local Library = {
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
     GradientSpread = 0.35;-- hue range spread across the window when GradientAccent is on (rainbow mode)
     MenuFadeTime = nil;   -- overrides the window's MenuFadeTime when set (seconds)
-    GlassTransparency = 0.2;  -- frosted glass: how see-through the window / sections are, with the game blurred
+    GlassTransparency = 0.1;  -- frosted glass: how see-through the window / sections are, with the game blurred
                           -- behind them only (0 = off, solid window). Set before CreateWindow.
     BlurBillboards = true;    -- also blur the game's name tags / damage numbers behind a glass frame
     Animations = true;    -- eased UI changes (see Library:CreateTween); false makes everything snap
@@ -245,12 +251,31 @@ table.insert(Library.Signals, InputService.InputBegan:Connect(function(Input)
     if Input.UserInputType == Enum.UserInputType.Touch then
         TouchStart[Input] = Input.Position;
         LastTouch = Input.Position;
+
+        -- a tooltip pinned by a long press (Library:AddToolTip) goes when a finger lands outside it and its element
+        local Pinned = Library.PinnedTooltip;
+
+        if Pinned then
+            local function Covers(Frame)
+                local Pos, Size = Frame.AbsolutePosition, Frame.AbsoluteSize;
+                return Input.Position.X >= Pos.X and Input.Position.X <= Pos.X + Size.X
+                    and Input.Position.Y >= Pos.Y and Input.Position.Y <= Pos.Y + Size.Y;
+            end;
+
+            if not (Covers(Pinned.Tooltip) or Covers(Pinned.Owner)) then
+                Library.PinnedTooltip = nil;
+            end;
+        end;
     end;
 end));
 
 table.insert(Library.Signals, InputService.InputEnded:Connect(function(Input)
     if TouchStart[Input] then
         task.defer(function() TouchStart[Input] = nil; end); -- after the tap handlers have read it
+    end;
+
+    if LongPressed[Input] then
+        task.delay(0.5, function() LongPressed[Input] = nil; end); -- IsTap reads it a frame after the release
     end;
 end));
 
@@ -833,28 +858,48 @@ function Library:AddToolTip(InfoStr, HoverInstance, AllowOpenedFrame)
     end
 
     HoverInstance.MouseEnter:Connect(function()
-        if LastTouch then
-            return -- a finger: the InputBegan handler below shows it for as long as the touch is held
+        if LastTouch or IsMobile then
+            return -- a finger: the InputBegan handler below shows it after a long press
         end
         ShowWhile(function() return Library:IsMouseOverFrame(HoverInstance) end)
     end)
 
-    -- Touch: shown for as long as the finger is held down on the element, above the fingertip.
+    -- Touch: a finger resting on the element for TOUCH_HOLD seconds shows it (a tap or a scrolling swipe never does).
+    -- It then stays up, above where the finger was, also once the finger is lifted: until a touch lands outside the
+    -- element and the tooltip (the InputBegan signal at the top), or another tooltip is pinned.
     HoverInstance.InputBegan:Connect(function(Input)
         if Input.UserInputType ~= Enum.UserInputType.Touch then
             return
         end
-        ShowWhile(function()
+
+        local Start, Began = Input.Position, os.clock()
+        while os.clock() - Began < TOUCH_HOLD do
             local State = Input.UserInputState
-            return State == Enum.UserInputState.Begin or State == Enum.UserInputState.Change
-        end, function()
-            return Vector2.new(Input.Position.X, Input.Position.Y)
-        end)
+            if (State ~= Enum.UserInputState.Begin and State ~= Enum.UserInputState.Change)
+                or (Input.Position - Start).Magnitude > TAP_SLOP then
+                return
+            end
+            RenderStepped:Wait()
+        end
+
+        if (not AllowOpenedFrame and Library:MouseIsOverOpenedFrame()) or not UpdateText() then
+            return -- nothing to show: the hold stays an ordinary tap
+        end
+
+        LongPressed[Input] = true
+        local Pin = { Tooltip = Tooltip, Owner = HoverInstance }
+        local Point = Vector2.new(Start.X, Start.Y)
+        Library.PinnedTooltip = Pin
+        ShowWhile(function() return Library.PinnedTooltip == Pin end, function() return Point end)
+
+        if Library.PinnedTooltip == Pin then
+            Library.PinnedTooltip = nil -- it went for another reason (the menu was hidden)
+        end
     end)
 
     HoverInstance.MouseLeave:Connect(function()
         if LastTouch then
-            return -- touch tooltips end when the finger lifts, not on the leave a release fires
+            return -- a pinned touch tooltip ends with a touch outside it, not on the leave a release fires
         end
         HoverSerial = HoverSerial + 1
         IsHovering = false
@@ -1329,14 +1374,17 @@ function Library:CreateIcon(Name, Info)
 
     for _, L in next, Shape.lines or {} do
         local DX, DY = L[3] - L[1], L[4] - L[2];
+        -- an upright line is sized, not turned: a rotated frame is anti-aliased, and at 1px the bar of the plus came
+        -- out dimmer than its dash
+        local Upright = DX == 0;
         -- + T px of length gives round caps that also close the joints of polylines
         local Line = Library:Create('Frame', {
             AnchorPoint = Vector2.new(0.5, 0.5);
             BackgroundColor3 = Color;
             BorderSizePixel = 0;
             Position = UDim2.fromScale((L[1] + L[3]) / 48, (L[2] + L[4]) / 48);
-            Rotation = math.deg(math.atan2(DY, DX));
-            Size = UDim2.new(math.sqrt(DX * DX + DY * DY) / 24, T, 0, T);
+            Rotation = Upright and 0 or math.deg(math.atan2(DY, DX));
+            Size = Upright and UDim2.new(0, T, math.abs(DY) / 24, T) or UDim2.new(math.sqrt(DX * DX + DY * DY) / 24, T, 0, T);
             ZIndex = ZIndex;
             Parent = Icon;
         });
@@ -3722,30 +3770,78 @@ do
             Library:AttemptSave();
         end;
 
+        -- The value under the pointer (mouse, or the last touch).
+        local function FollowPointer()
+            -- Mouse is in screen pixels, the track width (MaxSize) is unscaled; divide by the window
+            -- scale so the fill tracks the cursor at any UI scale.
+            local Scale = Library.WindowScale and Library.WindowScale.Scale or 1;
+            local nX = math.clamp((Mouse.X - SliderInner.AbsolutePosition.X) / Scale, 0, Slider.MaxSize);
+
+            local nValue = Slider:GetValueFromXOffset(nX);
+            local OldValue = Slider.Value;
+            Slider.Value = nValue;
+
+            Slider:Display();
+
+            if nValue ~= OldValue then
+                Library:SafeCallback(Slider.Callback, Slider.Value);
+                Library:SafeCallback(Slider.Changed, Slider.Value);
+            end;
+        end;
+
         SliderInner.InputBegan:Connect(function(Input)
-            if IsClick(Input) and not Library:MouseIsOverOpenedFrame() then
-                while IsHeld() do
-                    -- Mouse is in screen pixels, the track width (MaxSize) is unscaled; divide by the window
-                    -- scale so the fill tracks the cursor at any UI scale.
-                    local Scale = Library.WindowScale and Library.WindowScale.Scale or 1;
-                    local nX = math.clamp((Mouse.X - SliderInner.AbsolutePosition.X) / Scale, 0, Slider.MaxSize);
+            if not IsClick(Input) or Library:MouseIsOverOpenedFrame() then
+                return;
+            end;
 
-                    local nValue = Slider:GetValueFromXOffset(nX);
-                    local OldValue = Slider.Value;
-                    Slider.Value = nValue;
+            -- A finger: the way it first moves says what it is doing. Sideways drags the slider; up or down is a
+            -- swipe scrolling the menu, which used to drag the value of every slider it started on. A tap puts the
+            -- value where it landed. While dragging, the menu does not scroll away under the finger.
+            local Scroller;
 
-                    Slider:Display();
+            if Input.UserInputType == Enum.UserInputType.Touch then
+                local Start = Input.Position;
 
-                    if nValue ~= OldValue then
-                        Library:SafeCallback(Slider.Callback, Slider.Value);
-                        Library:SafeCallback(Slider.Changed, Slider.Value);
+                while true do
+                    local Move = Input.Position - Start;
+
+                    if math.abs(Move.X) > TAP_SLOP and math.abs(Move.X) >= math.abs(Move.Y) then
+                        break;
+                    elseif Move.Magnitude > TAP_SLOP then
+                        return;
+                    end;
+
+                    local State = Input.UserInputState;
+
+                    if State ~= Enum.UserInputState.Begin and State ~= Enum.UserInputState.Change then
+                        if State == Enum.UserInputState.End and not LongPressed[Input] then
+                            FollowPointer();
+                            Library:AttemptSave();
+                        end;
+
+                        return;
                     end;
 
                     RenderStepped:Wait();
                 end;
 
-                Library:AttemptSave();
+                Scroller = SliderInner:FindFirstAncestorWhichIsA('ScrollingFrame');
+
+                if Scroller then
+                    Scroller.ScrollingEnabled = false;
+                end;
             end;
+
+            while IsHeld() do
+                FollowPointer();
+                RenderStepped:Wait();
+            end;
+
+            if Scroller then
+                Scroller.ScrollingEnabled = true;
+            end;
+
+            Library:AttemptSave();
         end);
 
         -- Track width follows the real slider width (so custom window sizes work) instead of a fixed 232px.
@@ -4224,11 +4320,15 @@ do
             end, DropdownOuter)
         end
 
+        -- The open list is a VS Code style context menu: a rounded box over the blurred game (Library:AddGlass, tinted
+        -- like the menu: Library.GlassTransparency), rows inset LIST_PAD px, a rounded accent highlight under the
+        -- hovered row, and a check in front of the selected values.
         local MAX_DROPDOWN_ITEMS = 8;
+        local ROW_HEIGHT, LIST_PAD, CHECK_WIDTH = 22, 4, 24;
 
         local ListOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1;
+            BorderSizePixel = 0;
             ZIndex = 20;
             Visible = false;
             Active = true; -- keeps taps on the list out of the game world (the rows cannot do it, see RenderRows)
@@ -4236,21 +4336,23 @@ do
         });
 
         local function RecalculateListPosition()
-            Library:PlacePopupNear(ListOuter, DropdownOuter, 1);
+            Library:PlacePopupNear(ListOuter, DropdownOuter, 4); -- a gap, so the list does not read as part of the box
         end;
 
         local function RecalculateListSize(YSize)
-            ListOuter.Size = UDim2.fromOffset(DropdownOuter.AbsoluteSize.X / (Library.UIScale or 1), YSize or (MAX_DROPDOWN_ITEMS * 20 + 2))
+            ListOuter.Size = UDim2.fromOffset(DropdownOuter.AbsoluteSize.X / (Library.UIScale or 1), YSize or (MAX_DROPDOWN_ITEMS * ROW_HEIGHT + LIST_PAD * 2))
         end;
 
         RecalculateListPosition();
         RecalculateListSize();
 
-        DropdownOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
-            if ListOuter.Visible then RecalculateListPosition(); end; -- only while open, see the color picker
-        end);
-
         Library:RegisterPopup(ListOuter);
+
+        if Library.Blur or Library.GlassTransparency > 0 then -- a glass menu: the list blurs the game behind it too
+            Library:AddGlass(ListOuter, function()
+                return ListOuter.Visible, ListOuter.Visible;
+            end);
+        end;
 
         local ListTextScrollers = {};
         ListOuter:GetPropertyChangedSignal('Visible'):Connect(function()
@@ -4264,8 +4366,6 @@ do
 
         local ListInner = Library:Create('Frame', {
             BackgroundColor3 = Library.MainColor;
-            BorderColor3 = Library.OutlineColor;
-            BorderMode = Enum.BorderMode.Inset;
             BorderSizePixel = 0;
             Size = UDim2.new(1, 0, 1, 0);
             ZIndex = 21;
@@ -4274,8 +4374,63 @@ do
 
         Library:AddToRegistry(ListInner, {
             BackgroundColor3 = 'MainColor';
-            BorderColor3 = 'OutlineColor';
         });
+
+        Library:Create('UICorner', { CornerRadius = UDim.new(0, 6); Parent = ListInner });
+
+        -- the theme outline lifted toward the font color, as VS Code's menu border stands out from its fill
+        local function ListBorderColor()
+            return Library.OutlineColor:Lerp(Library.FontColor, 0.3);
+        end;
+
+        Library:AddToRegistry(Library:Create('UIStroke', {
+            Color = ListBorderColor();
+            Thickness = 1;
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+            Parent = ListInner;
+        }), { Color = ListBorderColor });
+
+        -- drop shadow, as under VS Code's menus: the list has the menu's own color, and without it the two blended
+        local ListShadow = Library:AddGlow(ListInner, 14, 20);
+        ListShadow.ImageColor3 = Color3.new(0, 0, 0);
+        ListShadow.ImageTransparency = 0.3;
+        ListShadow.Position = UDim2.new(0.5, 0, 0.5, 4);
+
+        -- Solid fill under the part of the list over the menu window: the menu's text showed through the tinted list
+        -- even at 2.5% (live, 2026-11-21). Only what sticks out past the window stays tinted over the blurred game.
+        local ListBacking = Library:Create('Frame', {
+            BackgroundColor3 = Library.MainColor;
+            BorderSizePixel = 0;
+            Visible = false;
+            ZIndex = 21;
+            Parent = ListInner;
+        });
+
+        Library:AddToRegistry(ListBacking, { BackgroundColor3 = 'MainColor' });
+        Library:Create('UICorner', { CornerRadius = UDim.new(0, 6); Parent = ListBacking });
+
+        local function PlaceListBacking()
+            local Window = Library.MainWindow;
+            local A, ASize = ListOuter.AbsolutePosition, ListOuter.AbsoluteSize;
+            local B, BSize = Window and Window.AbsolutePosition, Window and Window.AbsoluteSize;
+            local X0, Y0 = B and math.max(A.X, B.X), B and math.max(A.Y, B.Y);
+            local X1, Y1 = B and math.min(A.X + ASize.X, B.X + BSize.X), B and math.min(A.Y + ASize.Y, B.Y + BSize.Y);
+
+            ListBacking.Visible = Window ~= nil and Window.Visible and X1 > X0 and Y1 > Y0;
+
+            if ListBacking.Visible then
+                local Scale = math.max(Library.UIScale or 1, 0.01);
+                ListBacking.Position = UDim2.fromOffset((X0 - A.X) / Scale, (Y0 - A.Y) / Scale);
+                ListBacking.Size = UDim2.fromOffset((X1 - X0) / Scale, (Y1 - Y0) / Scale);
+            end;
+        end;
+
+        DropdownOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(function()
+            if ListOuter.Visible then -- only while open, see the color picker
+                RecalculateListPosition();
+                PlaceListBacking();
+            end;
+        end);
 
         local Scrolling = Library:Create('ScrollingFrame', {
             BackgroundTransparency = 1;
@@ -4289,11 +4444,13 @@ do
             BottomImage = 'rbxasset://textures/ui/Scroll/scroll-middle.png',
 
             ScrollBarThickness = 3,
-            ScrollBarImageColor3 = Library.AccentColor,
+            ScrollBarImageColor3 = Library.FontColor,
+            ScrollBarImageTransparency = 0.6,
+            VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar, -- rows end where the bar starts
         });
 
         Library:AddToRegistry(Scrolling, {
-            ScrollBarImageColor3 = 'AccentColor'
+            ScrollBarImageColor3 = 'FontColor'
         })
 
         -- Search box over the list: shown when the list scrolls (more than MAX_DROPDOWN_ITEMS values), or per
@@ -4301,26 +4458,25 @@ do
         local SEARCH_HEIGHT = 20;
         local Shown = Dropdown.Values;
 
-        -- darker strip (BackgroundColor) with an accent search icon, so it does not read as another option
+        -- an accent search icon and a separator line under it, so it does not read as another option
         local SearchRow = Library:Create('Frame', {
-            BackgroundColor3 = Library.BackgroundColor;
+            BackgroundTransparency = 1;
             BorderSizePixel = 0;
-            Size = UDim2.new(1, 0, 0, SEARCH_HEIGHT);
+            Position = UDim2.fromOffset(LIST_PAD, LIST_PAD);
+            Size = UDim2.new(1, -LIST_PAD * 2, 0, SEARCH_HEIGHT);
             Visible = false;
             ZIndex = 26;
             Parent = ListInner;
         });
 
-        Library:AddToRegistry(SearchRow, { BackgroundColor3 = 'BackgroundColor' });
-
         Library:AddToRegistry(Library:Create('Frame', {
-            BackgroundColor3 = Library.OutlineColor;
+            BackgroundColor3 = ListBorderColor();
             BorderSizePixel = 0;
             Position = UDim2.new(0, 0, 1, -1);
             Size = UDim2.new(1, 0, 0, 1);
             ZIndex = 27;
             Parent = SearchRow;
-        }), { BackgroundColor3 = 'OutlineColor' });
+        }), { BackgroundColor3 = ListBorderColor });
 
         Library:CreateIcon('search', {
             AnchorPoint = Vector2.new(0, 0.5);
@@ -4370,7 +4526,7 @@ do
                 end;
             end;
 
-            Scrolling.CanvasSize = UDim2.fromOffset(0, #Shown * 20 + 1);
+            Scrolling.CanvasSize = UDim2.fromOffset(0, #Shown * ROW_HEIGHT);
         end;
 
         function Dropdown:Display()
@@ -4412,17 +4568,18 @@ do
         function Dropdown:RenderRows(Force)
             if not ListOuter.Visible then return end;
             local Scale = math.max(Library.UIScale or 1, 0.01);
-            local First = math.max(1, math.floor(Scrolling.CanvasPosition.Y / Scale / 20) + 1);
+            local First = math.max(1, math.floor(Scrolling.CanvasPosition.Y / Scale / ROW_HEIGHT) + 1);
             if not Force and FirstRendered == First then return end;
             FirstRendered = First;
             local Count = math.min(#Shown, MAX_DROPDOWN_ITEMS + 2);
             for Index = #Rows + 1, Count do
                 local Row = {};
+                -- the row's fill is its hover highlight: clear until the pointer is over it
                 local Button = Library:Create('Frame', {
-                    BackgroundColor3 = Library.MainColor;
-                    BorderColor3 = Library.OutlineColor;
-                    BorderMode = Enum.BorderMode.Middle;
-                    Size = UDim2.new(1, -1, 0, 20);
+                    BackgroundColor3 = Library.AccentColor;
+                    BackgroundTransparency = 1;
+                    BorderSizePixel = 0;
+                    Size = UDim2.new(1, 0, 0, ROW_HEIGHT);
                     ZIndex = 23;
                     -- not Active: an Active row captures the finger, so a swipe on the list never scrolled it
                     -- (live: 90 px swipe, canvas stayed at 0; with inactive rows it moved 90)
@@ -4431,27 +4588,52 @@ do
                 Row.Button = Button;
 
                 Library:AddToRegistry(Button, {
-                    BackgroundColor3 = 'MainColor';
-                    BorderColor3 = 'OutlineColor';
+                    BackgroundColor3 = 'AccentColor';
+                });
+
+                Library:Create('UICorner', { CornerRadius = UDim.new(0, 4); Parent = Button });
+
+                -- at rest a selected row keeps a faint accent fill (Row.Rest, set by UpdateButton); hover fills it fully
+                Row.Rest = 1;
+
+                Button.MouseEnter:Connect(function()
+                    Row.Hovered = true;
+                    Library:Animate(Button, 0.06, { BackgroundTransparency = 0 });
+                end);
+
+                Button.MouseLeave:Connect(function()
+                    Row.Hovered = false;
+                    Library:Animate(Button, 0.1, { BackgroundTransparency = Row.Rest });
+                end);
+
+                -- selected values get a check in the column left of the names
+                Row.Check = Library:CreateIcon('check', {
+                    AnchorPoint = Vector2.new(0.5, 0.5);
+                    Position = UDim2.new(0, CHECK_WIDTH / 2, 0.5, 0);
+                    Size = 12;
+                    Thickness = 2;
+                    ZIndex = 25;
+                    Parent = Button;
                 });
 
                 -- ValueIcons: a 16px icon in front of the name, which moves right to make room
                 Row.Icon = Info.ValueIcons and Library:Create('ImageLabel', {
                     AnchorPoint = Vector2.new(0, 0.5);
                     BackgroundTransparency = 1;
-                    Position = UDim2.new(0, 5, 0.5, 0);
+                    Position = UDim2.new(0, CHECK_WIDTH, 0.5, 0);
                     Size = UDim2.fromOffset(16, 16);
                     ScaleType = Enum.ScaleType.Fit;
                     ZIndex = 25;
                     Parent = Button;
                 });
 
+                local TextX = CHECK_WIDTH + (Row.Icon and 20 or 0);
                 local ButtonClip = Library:Create('Frame', {
                     BackgroundTransparency = 1;
                     BorderSizePixel = 0;
                     ClipsDescendants = true;
-                    Position = UDim2.new(0, Row.Icon and 25 or 6, 0, 0);
-                    Size = UDim2.new(1, Row.Icon and -31 or -12, 1, 0);
+                    Position = UDim2.new(0, TextX, 0, 0);
+                    Size = UDim2.new(1, -(TextX + 8), 1, 0);
                     ZIndex = 25;
                     Parent = Button;
                 });
@@ -4474,15 +4656,13 @@ do
                     return ListOuter.Visible and Row.Value ~= nil and Dropdown:GetValueTooltip(Row.Value) or nil;
                 end, Button, true);
 
-                Library:OnHighlight(Button, Button,
-                    { BorderColor3 = 'AccentColor', ZIndex = 24 },
-                    { BorderColor3 = 'OutlineColor', ZIndex = 23 }
-                );
-
                 function Row:UpdateButton()
                     local Selected = Info.Multi and Dropdown.Value[self.Value] or Dropdown.Value == self.Value;
-                    ButtonLabel.TextColor3 = Selected and Library.AccentColor or Library.FontColor;
-                    Library.RegistryMap[ButtonLabel].Properties.TextColor3 = Selected and 'AccentColor' or 'FontColor';
+                    Row.Check.Visible = Selected and true or false;
+                    Row.Rest = Selected and 0.65 or 1;
+                    if not Row.Hovered then
+                        Button.BackgroundTransparency = Row.Rest;
+                    end;
                 end;
 
                 ButtonLabel.InputBegan:Connect(function(Input)
@@ -4541,7 +4721,7 @@ do
                         Row.Icon.Image = Dropdown:GetValueIcon(Value);
                     end;
                 end;
-                Row.Button.Position = UDim2.fromOffset(0, (ValueIndex - 1) * 20);
+                Row.Button.Position = UDim2.fromOffset(0, (ValueIndex - 1) * ROW_HEIGHT);
                 if Value == nil then
                     Row.Scroller.Wanted = false;
                     Row.Scroller:Stop();
@@ -4551,13 +4731,13 @@ do
         end;
 
         function Dropdown:BuildDropdownList()
-            local Top = IsSearchable() and SEARCH_HEIGHT or 0;
+            local Top = IsSearchable() and SEARCH_HEIGHT + LIST_PAD or 0;
             SearchRow.Visible = Top > 0;
-            Scrolling.Position = UDim2.fromOffset(0, Top);
-            Scrolling.Size = UDim2.new(1, 0, 1, -Top);
+            Scrolling.Position = UDim2.fromOffset(LIST_PAD, LIST_PAD + Top);
+            Scrolling.Size = UDim2.new(1, -LIST_PAD * 2, 1, -(LIST_PAD * 2 + Top));
             ApplyFilter();
             -- height from all values, not the matches, so the list does not jump around while typing
-            local Y = math.clamp(#Dropdown.Values * 20, 0, MAX_DROPDOWN_ITEMS * 20) + 1 + Top;
+            local Y = math.clamp(#Dropdown.Values * ROW_HEIGHT, 0, MAX_DROPDOWN_ITEMS * ROW_HEIGHT) + LIST_PAD * 2 + Top;
             RecalculateListSize(Y);
             Dropdown:Display();
             Dropdown:RenderRows(true);
@@ -4592,7 +4772,9 @@ do
             -- width from the header as it is now: built once, the list stayed narrow after the window was resized
             RecalculateListSize(ListOuter.Size.Y.Offset);
             RecalculateListPosition();
+            ListInner.BackgroundTransparency = Library.GlassTransparency; -- the menu's tint (Menu opacity slider)
             ListOuter.Visible = true;
+            PlaceListBacking();
             SearchBox.Text = ''; -- each open starts unfiltered (also re-renders the rows)
             Dropdown:RenderRows(true);
             Library.OpenedFrames[ListOuter] = true;
@@ -4608,6 +4790,10 @@ do
         function Dropdown:CloseDropdown()
             ListOuter.Visible = false;
             Library.OpenedFrames[ListOuter] = nil;
+            for _, Row in ipairs(Rows) do
+                Row.Hovered = false; -- a hidden row gets no MouseLeave
+                Row.Button.BackgroundTransparency = Row.Rest;
+            end;
             if SearchBox:IsFocused() then
                 SearchBox:ReleaseFocus();
             end;
@@ -5123,7 +5309,7 @@ Library.LayoutFile = nil;
 Library.Toggled = false;
 
 local SectionDragThreshold = 6;     -- px of mouse travel before a header press becomes a drag
-local SectionTouchHold = 0.35;      -- s a finger must rest on a header before the box can be dragged
+local SectionTouchHold = TOUCH_HOLD; -- s a finger must rest on a header before the box can be dragged
 local SectionPlaceholder, SectionPlaceholderStroke;
 
 local function MousePoint()
@@ -5495,6 +5681,7 @@ local function SectionDropTarget(Section, Point)
     end;
 end;
 
+-- Touch: the finger's InputObject (nil for a mouse).
 local function DragSection(Section, Touch)
     local Start, Began = MousePoint(), os.clock();
 
@@ -5519,6 +5706,10 @@ local function DragSection(Section, Touch)
 
     if Library.DraggingSection or not IsHeld() then
         return; -- a click, not a drag
+    end;
+
+    if Touch then
+        LongPressed[Touch] = true; -- picked up: lifting the finger is not a tap on the sub-tab it rested on
     end;
 
     Library.DraggingSection = Section;
@@ -5663,6 +5854,7 @@ function Library:RegisterSection(Info)
         Parent = Section.FoldButton;
     });
     Section.FoldBar = FoldPieces[2];
+    Section.FoldBar.Visible = false; -- unfolded: a minus. Without a saved layout nothing else set it, and every box showed +
 
     -- Lucide pin (stays while the menu is hidden) / pin-off (hides with the menu)
     Section.PinButton = Library:Create('Frame', {
@@ -5708,7 +5900,7 @@ function Library:RegisterSection(Info)
         -- the press itself, not the shared Mouse position: a stale value above the box also passed "<= header"
         local Y = (Input.Position.Y - Section.Outer.AbsolutePosition.Y) / Library.UIScale;
         if Y >= 0 and Y <= Section.HeaderHeight then
-            DragSection(Section, Input.UserInputType == Enum.UserInputType.Touch);
+            DragSection(Section, Input.UserInputType == Enum.UserInputType.Touch and Input); -- the touch itself
         end;
     end);
 
@@ -6691,21 +6883,11 @@ function Library:CreateWindow(...)
                 BackgroundColor3 = 'BackgroundColor';
             });
 
-            local Highlight = Library:Create('Frame', {
-                BackgroundColor3 = Library.AccentColor;
-                BorderSizePixel = 0;
-                Size = UDim2.new(1, 0, 0, 2);
-                ZIndex = 10;
-                Parent = BoxInner;
-            });
-
-            Library:AddToRegistry(Highlight, {
-                BackgroundColor3 = 'AccentColor';
-            });
-
-            -- Header geometry: 2 px accent line, tab strip, 1 px divider, then the content.
-            local TabStripTop = 3;
-            local TabStripHeight = 20;
+            -- Header, as VS Code's editor tabs: the tab strip is the box's top 23 px. The active tab carries the box's
+            -- 2 px accent line (only as wide as that tab), is lifted a shade and is open at the bottom; a line under
+            -- the rest of the strip and one after every tab separate them. Then 3 px and the content.
+            local TabStripTop = 0;
+            local TabStripHeight = 23;
             local DividerY = TabStripTop + TabStripHeight;
             local ContentTop = DividerY + 4;
 
@@ -6740,7 +6922,7 @@ function Library:CreateWindow(...)
             Section.Content = function()
                 return Tabbox.ActiveTab and Tabbox.ActiveTab.Container;
             end;
-            Section.FoldedHeight = ContentTop + 2;
+            Section.FoldedHeight = DividerY + 1 + 4; -- ends on the line under the strip (BoxInner is 4 px shorter than the box)
             -- the strip leaves room for the fold button, and for the pin as well while floating
             local function HeaderReserve()
                 return Section.Floating and 34 or 18;
@@ -6757,28 +6939,41 @@ function Library:CreateWindow(...)
                 Parent = TabboxButtons;
             });
 
-            -- Thin divider under the tab strip; the active tab's accent underline sits on top of it.
-            local TabboxDivider = Library:Create('Frame', {
-                BackgroundColor3 = Library.OutlineColor;
+            -- Every line of the box is one continuous outline (in the outline color; only the active tab's top line
+            -- is accent): around the whole box, with the dividers between the tabs and the line under the strip
+            -- running into it. On glass the box's own border is as clear as its background, so it is drawn as lines
+            -- here; a solid box's border already is that outline.
+            if Glass then
+                Line({ Size = UDim2.new(1, 0, 0, 1); ZIndex = 5; Parent = BoxInner });
+                Line({ Size = UDim2.new(0, 1, 1, 0); ZIndex = 5; Parent = BoxInner });
+                Line({ AnchorPoint = Vector2.new(1, 0); Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, 1, 1, 0); ZIndex = 5; Parent = BoxInner });
+                Line({ AnchorPoint = Vector2.new(0, 1); Position = UDim2.new(0, 0, 1, 0); Size = UDim2.new(1, 0, 0, 1); ZIndex = 5; Parent = BoxInner });
+            end;
+
+            -- The line under the strip, in two pieces that leave the active tab open at the bottom.
+            local DividerLeft = Line({ Position = UDim2.fromOffset(0, DividerY); Size = UDim2.fromOffset(0, 1); ZIndex = 5; Parent = BoxInner });
+            local DividerRight = Line({ Position = UDim2.fromOffset(0, DividerY); Size = UDim2.new(1, 0, 0, 1); ZIndex = 5; Parent = BoxInner });
+
+            -- The active tab's shade (a light lift of whatever the box shows, so it works on glass and in any theme)
+            -- and its accent line: one of each for the whole strip, sliding to the active tab. They live in BoxInner,
+            -- not the strip, which a UIListLayout arranges.
+            local TabboxFill = Library:Create('Frame', {
+                BackgroundColor3 = Library.FontColor;
+                BackgroundTransparency = 0.94;
                 BorderSizePixel = 0;
-                Position = UDim2.new(0, 4, 0, DividerY);
-                Size = UDim2.new(1, -8, 0, 1);
                 ZIndex = 5;
                 Parent = BoxInner;
             });
 
-            Library:AddToRegistry(TabboxDivider, {
-                BackgroundColor3 = 'OutlineColor';
+            Library:AddToRegistry(TabboxFill, {
+                BackgroundColor3 = 'FontColor';
             });
 
-            -- One accent bar for the whole strip, sitting on the divider; it slides to the active tab and fits its
-            -- name's width. It lives in BoxInner, not the strip, which a UIListLayout arranges.
             local TabboxUnderline = Library:Create('Frame', {
-                AnchorPoint = Vector2.new(0.5, 1);
                 BackgroundColor3 = Library.AccentColor;
                 BorderSizePixel = 0;
                 Size = UDim2.new(0, 0, 0, 2);
-                ZIndex = 8;
+                ZIndex = 10;
                 Parent = BoxInner;
             });
 
@@ -6787,26 +6982,64 @@ function Library:CreateWindow(...)
             });
 
             local TabboxTabCount = 0;
+            local TabList = {};  -- in strip order
+            local TAB_PAD = 16;  -- a tab is its name and this much room around it
 
+            -- Tabs are left aligned, each as wide as its name. Names that do not all fit share the strip in proportion
+            -- to their length, and truncate.
+            function Tabbox:FitTabs()
+                local Available = TabboxButtons.AbsoluteSize.X / math.max(Library.UIScale or 1, 0.01);
+                local Total = 0;
+
+                for _, Tab in next, TabList do
+                    Total = Total + Tab.TextWidth + TAB_PAD;
+                end;
+
+                local Shrink = (Available > 0 and Total > Available) and Available / Total or 1;
+                local Left = 0;
+
+                for _, Tab in next, TabList do
+                    Tab.Width = math.floor((Tab.TextWidth + TAB_PAD) * Shrink);
+                    Tab.Left = Left;
+                    Left = Left + Tab.Width;
+                    Tab.Button.Size = UDim2.new(0, Tab.Width, 1, 0);
+                end;
+            end;
+
+            TabboxButtons:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+                Tabbox:MoveUnderline(true); -- the box was resized: the tabs may fit now, or no longer
+            end);
+
+            -- Puts the accent line, the shade and the gap in the bottom line on the active tab.
             function Tabbox:MoveUnderline(Instant)
                 local Active = Tabbox.ActiveTab;
                 if not Active then
                     return;
                 end;
 
-                -- centre of tab i of N in the strip, which is HeaderReserve() px narrower than the box
-                local F = (Active.Index - 0.5) / TabboxTabCount;
-                local ButtonWidth = Active.Button.AbsoluteSize.X / math.max(Library.UIScale or 1, 0.01);
-                local Width = ButtonWidth > 6 and math.min(Active.UnderlineWidth, ButtonWidth - 6) or Active.UnderlineWidth;
-                local Goal = {
-                    Position = UDim2.new(F, -HeaderReserve() * F, 0, TabStripTop + TabStripHeight);
-                    Size = UDim2.new(0, Width, 0, 2);
+                Tabbox:FitTabs();
+
+                -- a tab's last column is its divider: the bottom line starts again there
+                local Left, Width = Active.Left, Active.Width;
+                local Goals = {
+                    [TabboxUnderline] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width, 2) };
+                    [TabboxFill] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width - 1, DividerY + 1) };
+                    [DividerLeft] = { Size = UDim2.fromOffset(Left, 1) };
+                    [DividerRight] = { Position = UDim2.fromOffset(Left + Width - 1, DividerY); Size = UDim2.new(1, -(Left + Width - 1), 0, 1) };
                 };
 
-                if Instant then
-                    Library:Create(TabboxUnderline, Goal);
-                else
-                    Library:Animate(TabboxUnderline, 0.2, Goal);
+                -- no line after the last tab, unless it is the active one's edge: with the strip full, it boxed the
+                -- fold button in like one more tab
+                for Index, Tab in next, TabList do
+                    Tab.Divider.Visible = Index < #TabList or Tab == Active;
+                end;
+
+                for Object, Goal in next, Goals do
+                    if Instant then
+                        Library:Create(Object, Goal);
+                    else
+                        Library:Animate(Object, 0.2, Goal);
+                    end;
                 end;
             end;
 
@@ -6815,18 +7048,21 @@ function Library:CreateWindow(...)
                 local TabInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
                 local Active = false;
 
-                -- Underline tabs: no boxes, just the name (dimmed while inactive) and an accent bar under the
-                -- active one that slides open to the width of its text.
+                -- The name (dimmed while inactive) and a divider on the tab's right edge; the active tab's accent
+                -- line and shade are Tabbox:MoveUnderline's.
                 local Button = Library:Create('Frame', {
                     BackgroundTransparency = 1;
                     BorderSizePixel = 0;
-                    Size = UDim2.new(0.5, 0, 1, 0);
+                    Size = UDim2.new(0, 0, 1, 0); -- Tabbox:FitTabs
                     ZIndex = 6;
                     Parent = TabboxButtons;
                 });
 
+                Tab.Divider = Line({ AnchorPoint = Vector2.new(1, 0); Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, 1, 1, 0); ZIndex = 6; Parent = Button });
+
                 local ButtonLabel = Library:CreateLabel({
-                    Size = UDim2.new(1, 0, 1, -2);
+                    Position = UDim2.fromOffset(0, 2); -- under the accent line
+                    Size = UDim2.new(1, -1, 1, -2);
                     TextSize = 14;
                     Text = Name;
                     TextTransparency = 0.45;
@@ -6844,8 +7080,9 @@ function Library:CreateWindow(...)
                 TabboxTabCount = TabboxTabCount + 1;
                 Tab.Index = TabboxTabCount;
                 Tab.Button = Button;
-                Tab.UnderlineWidth = Library:GetTextBounds(Name, Library.Font, 14) + 10;
-                Button.LayoutOrder = TabboxTabCount; -- the strip order must match Index for the underline position
+                Tab.TextWidth = Library:GetTextBounds(Name, Library.Font, 14);
+                Button.LayoutOrder = TabboxTabCount; -- the strip order must match TabList for the accent line's position
+                table.insert(TabList, Tab);
 
                 local function FadeLabel(Transparency)
                     Library:CreateTween(ButtonLabel, TabInfo, { TextTransparency = Transparency }):Play();
@@ -6947,24 +7184,12 @@ function Library:CreateWindow(...)
                 end;
 
                 function Tab:Resize()
-                    local TabCount = 0;
-
-                    for _, Tab in next, Tabbox.Tabs do
-                        TabCount = TabCount + 1;
-                    end;
-
-                    for _, Button in next, TabboxButtons:GetChildren() do
-                        if not Button:IsA('UIListLayout') then
-                            Button.Size = UDim2.new(1 / TabCount, 0, 1, 0);
-                        end;
-                    end;
-
                     if Section.Animating then
                         return; -- SetSectionFolded is easing the height and resizes once it is done
                     end;
 
                     if Section.Folded then
-                        BoxOuter.Size = UDim2.new(1, 0, 0, ContentTop + 2);
+                        BoxOuter.Size = UDim2.new(1, 0, 0, Section.FoldedHeight);
                         return;
                     end;
 
@@ -7003,7 +7228,7 @@ function Library:CreateWindow(...)
                     Tab:Show();
                 end;
 
-                Tabbox:MoveUnderline(true); -- one more tab narrows every slot, so the bar moves under its tab again
+                Tabbox:MoveUnderline(true); -- sizes the new tab (and the others, should they no longer all fit)
 
                 return Tab;
             end;
