@@ -1077,50 +1077,67 @@ end;
 -- Blurring the game's billboards (name tags, health bars, damage numbers) through the glass. Drawn AlwaysOnTop they
 -- go on screen after the post effects and stay sharp. In the 3D pass the blur does reach them, but one behind the
 -- Glass part is not drawn at all. So while a glass frame is shown (Library.BlurBillboards) each AlwaysOnTop billboard
--- is moved into the 3D pass and held BILLBOARD_DEPTH studs from the camera, in front of the glass: it is re-adorned
+-- behind one is moved into the 3D pass and held BILLBOARD_DEPTH studs from the camera, in front of the glass: re-adorned
 -- to a proxy part on the line from the camera to its real adornee, with the proxy's size and the billboard's stud
 -- offsets and stud size all scaled by the same factor, which leaves it exactly where and as large as it was on
 -- screen. Over a glass frame it then blurs with the scene; anywhere else it looks as before. All tested live with
 -- own billboards, 2026-11-21.
+-- Only a billboard that is behind a glass frame on screen is held. In the 3D pass a billboard takes every post
+-- effect the game runs, wherever it is: with all of them held, the game's own full-screen blur (the one it turns on
+-- behind its windows) smeared every name tag and message on screen while the menu was open (live, 2026-11-22).
 -- (A plain table: with weak keys the entries of live GUIs were collected, and those were never put back.)
-local Billboards, BillboardSignals, BillboardsOn = {}, {}, false; -- [Gui] = what the game set + what was written
+local Billboards, BillboardSignals, BillboardsOn = {}, {}, false; -- [Gui] = { Held, what the game set, what was written }
+local HOLD_MARGIN = 30; -- px around a glass frame that still counts as behind it (twice that to be let go again)
 
 local function TrackBillboard(Gui)
     if Gui:IsA('BillboardGui') and Gui.AlwaysOnTop and not Billboards[Gui] then
-        Gui.AlwaysOnTop = false;
-        Billboards[Gui] = {};
+        Billboards[Gui] = {}; -- left as it is until HoldBillboards finds it behind a glass frame
+    end;
+end;
+
+-- Back to how the game had it; still tracked.
+local function LetGo(Gui, Data)
+    if Data.Held then
+        Data.Held = false;
+
+        if Gui.Parent then
+            Gui.Adornee = Data.Adornee;
+            Gui.StudsOffset = Data.Offset;
+            Gui.StudsOffsetWorldSpace = Data.World;
+            Gui.Size = Data.Size;
+            Gui.AlwaysOnTop = true;
+        end;
+    end;
+
+    if Data.Proxy then
+        Data.Proxy:Destroy();
+        Data.Proxy = nil;
     end;
 end;
 
 local function ReleaseBillboard(Gui, Data)
     Billboards[Gui] = nil;
-
-    if Gui.Parent then
-        if Data.Size then
-            Gui.Adornee = Data.Adornee;
-            Gui.StudsOffset = Data.Offset;
-            Gui.StudsOffsetWorldSpace = Data.World;
-            Gui.Size = Data.Size;
-        end;
-
-        Gui.AlwaysOnTop = true;
-    end;
-
-    if Data.Proxy then
-        Data.Proxy:Destroy();
-    end;
+    LetGo(Gui, Data);
 end;
 
--- Every frame, after the camera has moved (UpdateGlass).
-local function HoldBillboards(Camera)
+-- Every frame, after the camera has moved (UpdateGlass). Rects: the glass frames on screen, { X0, Y0, X1, Y1 } in
+-- viewport px.
+local function HoldBillboards(Camera, Rects)
     local Eye = Camera.CFrame;
 
     for Gui, Data in next, Billboards do
-        -- whatever is not what was written last frame is the game's own (new) value
-        if Gui.Adornee ~= Data.Proxy then Data.Adornee = Gui.Adornee; end;
-        if Gui.StudsOffset ~= Data.SetOffset then Data.Offset = Gui.StudsOffset; end;
-        if Gui.StudsOffsetWorldSpace ~= Data.SetWorld then Data.World = Gui.StudsOffsetWorldSpace; end;
-        if Gui.Size ~= Data.SetSize then Data.Size = Gui.Size; end;
+        if Data.Held then
+            -- whatever is not what was written last frame is the game's own (new) value
+            if Gui.Adornee ~= Data.Proxy then Data.Adornee = Gui.Adornee; end;
+            if Gui.StudsOffset ~= Data.SetOffset then Data.Offset = Gui.StudsOffset; end;
+            if Gui.StudsOffsetWorldSpace ~= Data.SetWorld then Data.World = Gui.StudsOffsetWorldSpace; end;
+            if Gui.Size ~= Data.SetSize then Data.Size = Gui.Size; end;
+        elseif not Gui.AlwaysOnTop then
+            Billboards[Gui] = nil; -- the game has put it in the scene itself: no longer one of these
+            continue;
+        else
+            Data.Adornee, Data.Offset, Data.World, Data.Size = Gui.Adornee, Gui.StudsOffset, Gui.StudsOffsetWorldSpace, Gui.Size;
+        end;
 
         local Target = Data.Adornee or Gui.Parent;
         local Place = Target and (Target:IsA('BasePart') and Target.CFrame or Target:IsA('Attachment') and Target.WorldCFrame);
@@ -1128,6 +1145,33 @@ local function HoldBillboards(Camera)
         if not (Gui.Parent and Place) then -- destroyed, or adorned to something this cannot follow
             ReleaseBillboard(Gui, Data);
             continue;
+        end;
+
+        -- where it is on screen (its middle, near enough, and its size in px): behind a glass frame?
+        local Point = Camera:WorldToViewportPoint(Place.Position + Place:VectorToWorldSpace(Data.World) + Eye:VectorToWorldSpace(Data.Offset));
+        local Half = Gui.AbsoluteSize / 2;
+        local Margin = Data.Held and HOLD_MARGIN * 2 or HOLD_MARGIN;
+        local Behind = false;
+
+        if Point.Z > 0 then
+            for _, Rect in next, Rects do
+                if Point.X + Half.X >= Rect[1] - Margin and Point.X - Half.X <= Rect[3] + Margin
+                    and Point.Y + Half.Y >= Rect[2] - Margin and Point.Y - Half.Y <= Rect[4] + Margin then
+
+                    Behind = true;
+                    break;
+                end;
+            end;
+        end;
+
+        if not Behind then
+            LetGo(Gui, Data);
+            continue;
+        end;
+
+        if not Data.Held then
+            Data.Held = true;
+            Gui.AlwaysOnTop = false;
         end;
 
         -- the billboard's own depth, near enough: its adornee's, moved by the two stud offsets
@@ -1194,6 +1238,7 @@ local function UpdateGlass(Delta)
     local Camera = workspace.CurrentCamera;
     local Blur = Library.Blur;
     local Wanted = false;
+    local Rects = {}; -- the glass frames on screen, for HoldBillboards
 
     if not Blur.Parent then
         Blur = NewBlur(Blur.NearIntensity);
@@ -1220,7 +1265,9 @@ local function UpdateGlass(Delta)
         if Visible and Camera then
             local Size = Frame.AbsoluteSize;
             local PerPixel = math.tan(math.rad(Camera.FieldOfView) / 2) * GLASS_DEPTH * 2 / Camera.ViewportSize.Y;
-            local Center = Frame.AbsolutePosition + Size / 2 + GuiService:GetGuiInset() - Camera.ViewportSize / 2;
+            local Corner = Frame.AbsolutePosition + GuiService:GetGuiInset();
+            local Center = Corner + Size / 2 - Camera.ViewportSize / 2;
+            Rects[#Rects + 1] = { Corner.X, Corner.Y, Corner.X + Size.X, Corner.Y + Size.Y };
 
             Glass.Part.Size = Vector3.new(Size.X * PerPixel, Size.Y * PerPixel, 0);
             Glass.Part.CFrame = Camera.CFrame * CFrame.new(Center.X * PerPixel, -Center.Y * PerPixel, -GLASS_DEPTH);
@@ -1235,7 +1282,7 @@ local function UpdateGlass(Delta)
     end;
 
     if BillboardsOn then
-        HoldBillboards(Camera);
+        HoldBillboards(Camera, Rects);
     end;
 end;
 
@@ -3354,8 +3401,13 @@ do
         local Groupbox = self;
         local Container = Groupbox.Container;
 
-        -- Rounded checkbox: an outlined box whose accent fill grows from the centre when the toggle is on. The
-        -- label dims while off, so the active options stand out at a glance.
+        -- Rounded checkbox in the look of a selected row of a dropdown list: on, the box takes a faint accent tint,
+        -- an accent outline and a check; the tint grows from the centre. The label dims while off, so the active
+        -- options stand out at a glance.
+        -- The on / off state is the tint's size, never its transparency: the menu's fades own every transparency,
+        -- and a toggle switched while the menu is hidden (a keybind, a loading config) must still come back right.
+        local TINT = 0.65;
+        local CHECK_SIZE = UDim2.fromScale(0.75, 0.75);
         local ToggleOuter = Library:Create('Frame', {
             BackgroundColor3 = Library.MainColor;
             BorderSizePixel = 0;
@@ -3394,6 +3446,7 @@ do
             AnchorPoint = Vector2.new(0.5, 0.5);
             Position = UDim2.fromScale(0.5, 0.5);
             BackgroundColor3 = Library.AccentColor;
+            BackgroundTransparency = TINT;
             BorderSizePixel = 0;
             Size = UDim2.fromScale(0, 0);
             ZIndex = 6;
@@ -3405,17 +3458,17 @@ do
         });
 
         Library:Create('UICorner', {
-            CornerRadius = UDim.new(0, 2);
+            CornerRadius = UDim.new(0, 3); -- the box's own corners: the tint fills it edge to edge
             Parent = ToggleInner;
         });
 
-        -- Lucide check over the fill, in the background color so it reads on any accent; shown only while on
+        -- Lucide check over the tint, in the font color as in the dropdown list; shown only while on
         local ToggleCheck = Library:CreateIcon('check', {
             AnchorPoint = Vector2.new(0.5, 0.5);
-            Color = 'BackgroundColor';
+            Color = 'FontColor';
             Position = UDim2.fromScale(0.5, 0.5);
-            Size = UDim2.fromScale(0.8, 0.8);
-            Thickness = 1;
+            Size = CHECK_SIZE;
+            Thickness = 2;
             ZIndex = 7;
             Parent = ToggleOuter;
         });
@@ -3482,39 +3535,22 @@ do
             Library:AddToolTip(Info.Tooltip, ToggleRegion)
         end
 
-        -- On-fill sized from the box's real pixel height so (box - fill) is even and the gap is equal on every side.
-        -- A fixed (1, -4) fill is 9px, and at a fractional UI scale the box renders an even 14px, which left the fill
-        -- 1px off-center.
-        local function OnFillSize()
-            if ToggleOuter.AbsoluteSize.Y < 1 then
-                return UDim2.new(1, -4, 1, -4); -- not laid out yet; the AbsoluteSize hook below resizes it
-            end;
-
-            local Real = ToggleOuter.AbsoluteSize.Y;
-            local Box = math.floor(Real + 0.5);
-            local Gap = math.max(2, math.floor(2 * Real / 13 + 0.5));
-            -- a fraction of the box, not an offset: UDim offsets are whole numbers and would round the fill again
-            local Fraction = math.max(Box - Gap * 2, 1) / Real;
-            return UDim2.fromScale(Fraction, Fraction);
-        end;
-
-        ToggleOuter:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
-            if Toggle.Value then
-                ToggleInner.Size = OnFillSize();
-            end;
-        end);
-
         function Toggle:Display(Instant)
             local On = Toggle.Value;
-            local FillSize = On and OnFillSize() or UDim2.fromScale(0, 0);
+            local FillSize = On and UDim2.fromScale(1, 1) or UDim2.fromScale(0, 0);
             local LabelFade = On and 0 or 0.35;
+
+            Library:RememberTransparency(ToggleLabel, 'TextTransparency', LabelFade);
+            if ToggleLabelStroke then
+                Library:RememberTransparency(ToggleLabelStroke, 'Transparency', LabelFade);
+            end;
 
             UpdateStroke();
             Library:ApplyElementGlow(ToggleGlow, Instant);
             ToggleCheck.Visible = On; -- grows with the fill; hides at once on off (a shrinking check leaves dots)
 
             if Instant then
-                ToggleCheck.Size = UDim2.fromScale(0.8, 0.8);
+                ToggleCheck.Size = CHECK_SIZE;
                 ToggleInner.Size = FillSize;
                 ToggleLabel.TextTransparency = LabelFade;
                 if ToggleLabelStroke then
@@ -3524,7 +3560,7 @@ do
                 Library:CreateTween(ToggleInner, FadeInfo, { Size = FillSize }):Play();
                 if On then
                     ToggleCheck.Size = UDim2.fromScale(0, 0);
-                    Library:CreateTween(ToggleCheck, FadeInfo, { Size = UDim2.fromScale(0.8, 0.8) }):Play();
+                    Library:CreateTween(ToggleCheck, FadeInfo, { Size = CHECK_SIZE }):Play();
                 end;
                 Library:CreateTween(ToggleLabel, FadeInfo, { TextTransparency = LabelFade }):Play();
                 if ToggleLabelStroke then
@@ -5958,6 +5994,12 @@ function Library:FadeTree(Root, Visible, Time, Rest, Delay)
     return Rest;
 end;
 
+-- For state shown as a transparency (a dimmed label): tells the menu's open / close fade the value the instance
+-- should have. Changed while the menu is hidden, it would otherwise fade back in to the value it had when it was
+-- closed: a toggle switched by its keybind kept the old brightness of its label. Library:CreateWindow replaces this.
+function Library:RememberTransparency(Instance, Property, Value)
+end;
+
 function Library:RestoreTree(Rest)
     if not Rest then
         return;
@@ -6587,8 +6629,10 @@ function Library:CreateWindow(...)
         local TabActive = false;
 
         local function FadeTabLabel(Transparency)
+            Library:RememberTransparency(TabButtonLabel, 'TextTransparency', Transparency);
             Library:CreateTween(TabButtonLabel, TabTweenInfo, { TextTransparency = Transparency }):Play();
             if TabLabelStroke then
+                Library:RememberTransparency(TabLabelStroke, 'Transparency', Transparency);
                 Library:CreateTween(TabLabelStroke, TabTweenInfo, { Transparency = Transparency }):Play();
             end;
         end;
@@ -7151,8 +7195,10 @@ function Library:CreateWindow(...)
                 table.insert(TabList, Tab);
 
                 local function FadeLabel(Transparency)
+                    Library:RememberTransparency(ButtonLabel, 'TextTransparency', Transparency);
                     Library:CreateTween(ButtonLabel, TabInfo, { TextTransparency = Transparency }):Play();
                     if ButtonLabelStroke then
+                        Library:RememberTransparency(ButtonLabelStroke, 'Transparency', Transparency);
                         Library:CreateTween(ButtonLabelStroke, TabInfo, { Transparency = Transparency }):Play();
                     end;
                 end;
@@ -7341,6 +7387,14 @@ function Library:CreateWindow(...)
     local Toggled = false;
     local ToggleGeneration = 0;
     local CursorRunning = false;
+
+    function Library:RememberTransparency(Instance, Property, Value)
+        local Cache = TransparencyCache[Instance];
+
+        if Cache then
+            Cache[Property] = Value;
+        end;
+    end;
 
     -- Frosted glass tint of a window built with GlassTransparency > 0 (0 = solid, blur off). Also patches the fade's
     -- cached value, which is what the next show restores.
