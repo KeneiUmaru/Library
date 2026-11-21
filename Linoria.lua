@@ -163,11 +163,12 @@ local Library = {
 
     HudRegistry = {};
 
-    FontColor = Color3.fromRGB(255, 255, 255);
-    MainColor = Color3.fromRGB(28, 28, 28);
-    BackgroundColor = Color3.fromRGB(20, 20, 20);
-    AccentColor = Color3.fromRGB(0, 85, 255);
-    OutlineColor = Color3.fromRGB(50, 50, 50);
+    -- the 'VS Code' theme (ThemeManager.BuiltInThemes), so a menu without the theme manager starts on it too
+    FontColor = Color3.fromRGB(204, 204, 204);
+    MainColor = Color3.fromRGB(31, 31, 31);
+    BackgroundColor = Color3.fromRGB(24, 24, 24);
+    AccentColor = Color3.fromRGB(0, 120, 212);
+    OutlineColor = Color3.fromRGB(43, 43, 43);
     RiskColor = Color3.fromRGB(255, 50, 50),
 
     Black = Color3.new(0, 0, 0);
@@ -187,6 +188,8 @@ local Library = {
     RainbowSpeed = 1;     -- multiplier for the accent animation speed (hue cycle / custom color flow)
     GradientSpread = 0.35;-- hue range spread across the window when GradientAccent is on (rainbow mode)
     MenuFadeTime = nil;   -- overrides the window's MenuFadeTime when set (seconds)
+    GlassTransparency = 0.2;  -- frosted glass: how see-through the window / sections are, with the game blurred
+                          -- behind them only (0 = off, solid window). Set before CreateWindow.
     Animations = true;    -- eased UI changes (see Library:CreateTween); false makes everything snap
     LightDrag = true;     -- drag the main window as an outline, move it on release (see Library:MakeDraggable)
 
@@ -987,6 +990,70 @@ function Library:GiveSignal(Signal)
     table.insert(Library.Signals, Signal)
 end
 
+-- Frosted glass behind translucent frames. DepthOfField blurs whatever is nearer than its focus range and Glass parts
+-- write depth, so a near-invisible Glass part held 1 stud in front of the camera blurs exactly the screen rectangle
+-- it covers. Shown() returns (frame is on screen, blur wanted): the blur eases out while a closing menu still fades.
+local GlassFrames = {};
+local GLASS_DEPTH = 1;
+
+local function UpdateGlass(Delta)
+    local Camera = workspace.CurrentCamera;
+    local Blur = Library.Blur;
+    local Wanted = false;
+
+    for Frame, Glass in next, GlassFrames do
+        if not Frame.Parent then -- destroyed with its window / panel
+            Glass.Part:Destroy();
+            GlassFrames[Frame] = nil;
+            continue;
+        end;
+
+        local Visible, Want = Glass.Shown();
+        Wanted = Wanted or Want;
+        Glass.Part.Parent = Visible and Camera or nil;
+
+        if Visible and Camera then
+            local Size = Frame.AbsoluteSize;
+            local PerPixel = math.tan(math.rad(Camera.FieldOfView) / 2) * GLASS_DEPTH * 2 / Camera.ViewportSize.Y;
+            local Center = Frame.AbsolutePosition + Size / 2 + GuiService:GetGuiInset() - Camera.ViewportSize / 2;
+
+            Glass.Part.Size = Vector3.new(Size.X * PerPixel, Size.Y * PerPixel, 0);
+            Glass.Part.CFrame = Camera.CFrame * CFrame.new(Center.X * PerPixel, -Center.Y * PerPixel, -GLASS_DEPTH);
+        end;
+    end;
+
+    Blur.NearIntensity = math.clamp(Blur.NearIntensity + (Wanted and Delta or -Delta) / 0.2, 0, 1);
+    Blur.Enabled = Blur.NearIntensity > 0;
+end;
+
+function Library:AddGlass(Frame, Shown)
+    if not Library.Blur then
+        local Blur = Instance.new('DepthOfFieldEffect');
+        Blur.Name = 'LinoriaBlur';
+        Blur.FarIntensity = 0;
+        Blur.FocusDistance = 51.6;
+        Blur.InFocusRadius = 50;
+        Blur.NearIntensity = 0;
+        Blur.Parent = game:GetService('Lighting');
+        Library.Blur = Blur;
+
+        -- after the camera scripts, so the parts never trail the camera by a frame
+        Library.GlassBinding = 'LinoriaGlass_' .. game:GetService('HttpService'):GenerateGUID(false);
+        RunService:BindToRenderStep(Library.GlassBinding, Enum.RenderPriority.Last.Value, UpdateGlass);
+    end;
+
+    local Part = Instance.new('Part');
+    Part.Anchored = true;
+    Part.CanCollide = false;
+    Part.CanQuery = false;
+    Part.CanTouch = false;
+    Part.CastShadow = false;
+    Part.Material = Enum.Material.Glass;
+    Part.Transparency = 0.98;
+
+    GlassFrames[Frame] = { Part = Part, Shown = Shown };
+end;
+
 function Library:Unload()
     -- Unload all of the signals
     for Idx = #Library.Signals, 1, -1 do
@@ -1000,6 +1067,15 @@ function Library:Unload()
     end
 
     ScreenGui:Destroy()
+
+    if Library.Blur then
+        RunService:UnbindFromRenderStep(Library.GlassBinding)
+        Library.Blur:Destroy()
+
+        for _, Glass in next, GlassFrames do
+            Glass.Part:Destroy()
+        end
+    end
 
     for _, Gui in next, PanelGuis do
         Gui:Destroy()
@@ -4888,6 +4964,11 @@ function Library:UpdateSectionButtons(Section)
     if Section.Holder then
         Section.Holder.Visible = Section.Floating and (Section.Stay or Library.Toggled);
     end;
+
+    -- Frosted glass: a docked box sits on the window's tint, so it only adds a faint panel; floating, it is the tint
+    if Section.Inner then
+        Section.Inner.BackgroundTransparency = Section.Floating and Library.GlassTransparency or 0.75;
+    end;
 end;
 
 -- Folding (Library.Animations): the content fades out while the box closes, then hides; unfolding grows the box while
@@ -5269,6 +5350,18 @@ function Library:RegisterSection(Info)
         Stay = true;
         ApplyFold = function() end;
     };
+
+    -- Frosted glass: a floating panel has no window behind it, so it carries its own blur
+    if Library.GlassTransparency > 0 then
+        Section.Inner = Info.Inner; -- tinted by Library:UpdateSectionButtons
+        Info.Outer.BackgroundTransparency = 1;
+        Info.Inner.BackgroundTransparency = 0.75;
+
+        Library:AddGlass(Info.Outer, function()
+            local Shown = Section.Floating and Section.Holder ~= nil and Section.Holder.Visible;
+            return Shown, Shown;
+        end);
+    end;
 
     -- Lucide minus / plus (one 'plus' icon; UpdateSectionButtons hides its vertical bar while unfolded)
     Section.FoldButton = Library:Create('Frame', {
@@ -5692,6 +5785,20 @@ function Library:CreateWindow(...)
         BackgroundColor3 = 'MainColor';
         BorderColor3 = 'OutlineColor';
     });
+
+    -- Frosted glass: only Inner tints the window; the layers stacked on it go clear so the blur shows through.
+    if Library.GlassTransparency > 0 then
+        Outer.BackgroundTransparency = 1;
+        Inner.BackgroundTransparency = Library.GlassTransparency;
+        MainSectionOuter.BackgroundTransparency = 1;
+        MainSectionInner.BackgroundTransparency = 1;
+        TabContainer.BackgroundTransparency = 1;
+        Library:Create('UICorner', { CornerRadius = UDim.new(0, 8); Parent = Inner }); -- the border stroke follows it
+
+        Library:AddGlass(Outer, function()
+            return Outer.Visible, Library.Toggled;
+        end);
+    end;
 
     function Window:SetWindowTitle(Title)
         WindowLabel.Text = Title;
@@ -6778,6 +6885,7 @@ local ThemeManager = {} do
 		['Cyberpunk'] = { 16, httpService:JSONDecode('{"FontColor":"e0fbfc","MainColor":"14121f","AccentColor":"fcee0a","BackgroundColor":"0d0b16","OutlineColor":"2e2a45"}') },
 		['Rose Gold'] = { 17, httpService:JSONDecode('{"FontColor":"fff5f2","MainColor":"2b2224","AccentColor":"e8a598","BackgroundColor":"221b1c","OutlineColor":"4a3a3c"}') },
 		['Royal Gold'] = { 18, httpService:JSONDecode('{"FontColor":"fff8e1","MainColor":"1a1a14","AccentColor":"d4af37","BackgroundColor":"141410","OutlineColor":"3a3626"}') },
+		['VS Code'] = { 19, httpService:JSONDecode('{"FontColor":"cccccc","MainColor":"1f1f1f","AccentColor":"0078d4","BackgroundColor":"181818","OutlineColor":"2b2b2b"}') },
 	}
 
 	function ThemeManager:ApplyTheme(theme)
@@ -6814,7 +6922,7 @@ local ThemeManager = {} do
 	end
 
 	function ThemeManager:LoadDefault()		
-		local theme = 'Default'
+		local theme = 'VS Code'
 		local content = isfile(self.Folder .. '/themes/default.txt') and readfile(self.Folder .. '/themes/default.txt')
 
 		local isDefault = true
