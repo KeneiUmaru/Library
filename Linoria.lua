@@ -190,6 +190,7 @@ local Library = {
     MenuFadeTime = nil;   -- overrides the window's MenuFadeTime when set (seconds)
     GlassTransparency = 0.2;  -- frosted glass: how see-through the window / sections are, with the game blurred
                           -- behind them only (0 = off, solid window). Set before CreateWindow.
+    BlurBillboards = true;    -- also blur the game's name tags / damage numbers while a glass frame is shown
     Animations = true;    -- eased UI changes (see Library:CreateTween); false makes everything snap
     LightDrag = true;     -- drag the main window as an outline, move it on release (see Library:MakeDraggable)
 
@@ -1022,6 +1023,47 @@ local function NewGlassPart()
     return Part;
 end;
 
+-- BillboardGuis drawn AlwaysOnTop (name tags, health bars, damage numbers) go on screen after the post effects, so
+-- they stayed sharp through the glass. While a glass frame is shown they are moved into the 3D pass, where the blur
+-- reaches them, and put back after. For that time walls and characters can cover them (Library.BlurBillboards).
+-- (A plain table: with weak keys the entries of live GUIs were collected, and those were never put back.)
+local Billboards, BillboardSignals, BillboardsOn = {}, {}, false;
+
+local function FlipBillboard(Gui)
+    if Gui:IsA('BillboardGui') and Gui.AlwaysOnTop then
+        Gui.AlwaysOnTop = false;
+        Billboards[Gui] = true;
+    end;
+end;
+
+local function SetBillboardBlur(On)
+    BillboardsOn = On;
+
+    if On then
+        for _, Root in next, { workspace, LocalPlayer:FindFirstChildOfClass('PlayerGui') } do
+            for _, Gui in next, Root:GetDescendants() do
+                FlipBillboard(Gui);
+            end;
+
+            table.insert(BillboardSignals, Root.DescendantAdded:Connect(FlipBillboard)); -- ones made meanwhile
+        end;
+
+        return;
+    end;
+
+    for _, Signal in next, BillboardSignals do
+        Signal:Disconnect();
+    end;
+    table.clear(BillboardSignals);
+
+    for Gui in next, Billboards do
+        if Gui.Parent then
+            Gui.AlwaysOnTop = true;
+        end;
+    end;
+    table.clear(Billboards);
+end;
+
 local function UpdateGlass(Delta)
     local Camera = workspace.CurrentCamera;
     local Blur = Library.Blur;
@@ -1061,6 +1103,10 @@ local function UpdateGlass(Delta)
 
     Blur.NearIntensity = math.clamp(Blur.NearIntensity + (Wanted and Delta or -Delta) / 0.2, 0, 1);
     Blur.Enabled = Blur.NearIntensity > 0;
+
+    if (Wanted and Library.BlurBillboards == true) ~= BillboardsOn then
+        SetBillboardBlur(not BillboardsOn);
+    end;
 end;
 
 function Library:AddGlass(Frame, Shown)
@@ -1092,6 +1138,10 @@ function Library:Unload()
     if Library.Blur then
         RunService:UnbindFromRenderStep(Library.GlassBinding)
         Library.Blur:Destroy()
+
+        if BillboardsOn then
+            SetBillboardBlur(false)
+        end
 
         for _, Glass in next, GlassFrames do
             Glass.Part:Destroy()
@@ -5563,14 +5613,13 @@ function Library:CreateWindow(...)
         Tabs = {};
     };
 
-    -- Tab backgrounds (Window:AddTab). Glass: the window tint is the content shade, so inactive tabs and the rest of
-    -- the bar are darkened over it. Solid: the bar is already the darker color, so only the active tab is filled.
+    -- Tab bar shades (the outline pieces below carry them, so they follow its rounded corners). Glass: the window
+    -- tint is the content shade, so the bar around the active tab is darkened over it. Solid: the bar is already the
+    -- darker color, so the active tab is filled with the content color.
     local Glass = Library.GlassTransparency > 0;
     local TAB_SHADE = 0.4;
     local TAB_HEIGHT, TAB_PADDING = 26, 12; -- VS Code proportions: room above / below and either side of the name
     local TAB_RADIUS = 5;                   -- corners of the outline around the active tab
-    local TabOn, TabOff = Glass and 1 or 0, Glass and TAB_SHADE or 1;
-    local TabFiller;
 
     -- 1px outline pieces of the tab bar and content box. On glass the theme's outline color sinks into the blurred
     -- scene behind it, so it is lifted toward the font color (as the off toggle boxes are).
@@ -5656,7 +5705,8 @@ function Library:CreateWindow(...)
             local Scale = math.max(Library.UIScale or 1, 0.01);
             local Delta = (Vector2.new(Mouse.X, Mouse.Y) - StartPointer) / Scale;
             -- never narrower than the tab bar, or the last tabs run off the window
-            local TabsWidth = Window.TabListLayout and Window.TabListLayout.AbsoluteContentSize.X / Scale + 40 or 0;
+            -- (their natural width: FitTabs stretches them over a nearly full bar, and would push the window wider)
+            local TabsWidth = (Window.TabsWidth or 0) + 40;
             local Width = math.max(StartSize.X.Offset + Delta.X, MinWindowSize.X, TabsWidth);
             local Height = math.max(StartSize.Y.Offset + Delta.Y, MinWindowSize.Y);
 
@@ -5768,7 +5818,34 @@ function Library:CreateWindow(...)
         SortOrder = Enum.SortOrder.LayoutOrder;
         Parent = TabArea;
     });
-    Window.TabListLayout = TabListLayout; -- the resize grip keeps the window at least this wide
+    Window.TabListLayout = TabListLayout;
+
+    -- Tabs that nearly fill the bar are widened to end exactly on its right edge (one px past the strip, on the
+    -- outline's edge column): the few px left over looked like a sliver of an extra tab. Window.TabsWidth is their
+    -- natural width, which the resize grip keeps the window wider than.
+    local AllTabs = {};
+    local function FitTabs()
+        -- measured, not summed from the frames' offsets: an inset border (MainSectionInner) also narrows its contents
+        local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
+        local BarWidth = math.floor(TabArea.AbsoluteSize.X / math.max(ScaleObject and ScaleObject.Scale or 1, 0.01) + 0.5);
+        local Used = 0;
+
+        for _, Tab in next, AllTabs do
+            Used = Used + Tab.NaturalWidth + Config.TabPadding;
+        end;
+
+        local Spare = BarWidth + 1 - Used;
+        local Fit = BarWidth > 0 and Spare > 0 and Spare <= TAB_PADDING * 3;
+
+        for Index, Tab in next, AllTabs do
+            local More = Fit and (math.floor(Spare / #AllTabs) + (Index <= Spare % #AllTabs and 1 or 0)) or 0;
+            Tab.Button.Size = UDim2.new(0, Tab.NaturalWidth + More, 1, 0);
+        end;
+
+        Window.TabsWidth = Used;
+    end;
+
+    TabArea:GetPropertyChangedSignal('AbsoluteSize'):Connect(FitTabs);
 
     -- One accent line along the top edge of the active tab (VS Code style) that slides to it. It lives beside the
     -- strip, which a UIListLayout arranges, and reads the active button's laid-out position.
@@ -5800,35 +5877,62 @@ function Library:CreateWindow(...)
         Parent = MainSectionInner;
     });
 
-    local function OutlinePiece(ClipProperties, BoxProperties)
+    -- Fill (optional): the registry color the box is filled with, and its transparency. The shades ride on the same
+    -- boxes as the outline, so a fill never sticks out past a rounded corner. Stroke = false: a fill-only piece.
+    local function OutlinePiece(ClipProperties, BoxProperties, Fill, FillTransparency, Stroke)
+        local ZIndex = Stroke == false and 3 or 4; -- a fill-only piece stays under the other pieces' lines
         ClipProperties.BackgroundTransparency = 1;
         ClipProperties.ClipsDescendants = true;
-        ClipProperties.ZIndex = 4;
+        ClipProperties.ZIndex = ZIndex;
         ClipProperties.Parent = TabOutline;
         local Clip = Library:Create('Frame', ClipProperties);
 
-        BoxProperties.BackgroundTransparency = 1;
-        BoxProperties.ZIndex = 4;
+        BoxProperties.BackgroundColor3 = Fill and Library[Fill] or nil;
+        BoxProperties.BackgroundTransparency = Fill and FillTransparency or 1;
+        BoxProperties.BorderSizePixel = 0;
+        BoxProperties.ZIndex = ZIndex;
         BoxProperties.Parent = Clip;
         local Box = Library:Create('Frame', BoxProperties);
 
         Library:Create('UICorner', { CornerRadius = UDim.new(0, TAB_RADIUS); Parent = Box });
-        Library:AddToRegistry(Library:Create('UIStroke', {
-            Color = LineColor();
-            Thickness = 1;
-            ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-            Parent = Box;
-        }), { Color = LineColor });
+
+        if Fill then
+            Library:AddToRegistry(Box, { BackgroundColor3 = Fill });
+        end;
+
+        if Stroke ~= false then
+            Library:AddToRegistry(Library:Create('UIStroke', {
+                Color = LineColor();
+                Thickness = 1;
+                ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+                Parent = Box;
+            }), { Color = LineColor });
+        end;
 
         return Clip, Box;
     end;
 
-    local ActiveClip, ActiveBox = OutlinePiece({}, { Position = UDim2.fromOffset(1, 1) });
-    local LeftClip, LeftBox = OutlinePiece({ Position = UDim2.fromOffset(0, TabHalf) }, { Position = UDim2.fromOffset(-TabReach, -TabReach) });
+    -- The bar's shade either side of the active tab. Bottom half: the outline boxes themselves. Top half (glass
+    -- only; a solid bar already is that color): fill-only boxes sharing the bar's rounded top corners.
+    local BarShade = Glass and TAB_SHADE or 0;
+    local ActiveClip, ActiveBox = OutlinePiece({}, { Position = UDim2.fromOffset(1, 1) }, not Glass and 'MainColor', 0);
+    local LeftClip, LeftBox = OutlinePiece({ Position = UDim2.fromOffset(0, TabHalf) }, { Position = UDim2.fromOffset(-TabReach, -TabReach) }, 'BackgroundColor', BarShade);
     local RightClip = OutlinePiece({}, {
         Position = UDim2.fromOffset(1, -TabReach);
         Size = UDim2.new(1, TabReach - 1, 0, TabLower - 1 + TabReach);
-    });
+    }, 'BackgroundColor', BarShade);
+    local UpperLeftClip, UpperRightClip;
+
+    if Glass then
+        UpperLeftClip = OutlinePiece({}, {
+            Position = UDim2.fromOffset(1, 1);
+            Size = UDim2.new(1, TabReach, 0, TAB_HEIGHT + TabReach);
+        }, 'BackgroundColor', BarShade, false);
+        UpperRightClip = OutlinePiece({}, {
+            Position = UDim2.fromOffset(-TabReach, 1);
+            Size = UDim2.new(1, TabReach - 1, 0, TAB_HEIGHT + TabReach);
+        }, 'BackgroundColor', BarShade, false);
+    end;
 
     -- The bar's own outline: the top line with rounded ends (the top half of a box as wide as the bar), then both
     -- sides straight down into the content box's outline. The sides are plain lines: a box seen through a 1px wide
@@ -5837,16 +5941,17 @@ function Library:CreateWindow(...)
     Line({ Position = UDim2.fromOffset(0, TabHalf); Size = UDim2.fromOffset(1, TabLower); ZIndex = 4; Parent = TabOutline });
     Line({ Position = UDim2.new(1, -1, 0, TabHalf); Size = UDim2.fromOffset(1, TabLower); ZIndex = 4; Parent = TabOutline });
 
-    -- Solid menu: the content box's top border runs along the bar's bottom row; this hides it under the active tab.
-    local TabGap = not Glass and Library:Create('Frame', {
+    -- Solid menu: the active tab's bottom half, in the content color, under the boxes left and right of it (their
+    -- fill covers it up to their rounded corners). It also covers the content box's top border below the tab.
+    local ActiveLower = not Glass and Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
         BorderSizePixel = 0;
         ZIndex = 3;
         Parent = TabOutline;
     });
 
-    if TabGap then
-        Library:AddToRegistry(TabGap, { BackgroundColor3 = 'MainColor' });
+    if ActiveLower then
+        Library:AddToRegistry(ActiveLower, { BackgroundColor3 = 'MainColor' });
     end;
 
     function Window:MoveUnderline(Instant)
@@ -5875,10 +5980,15 @@ function Library:CreateWindow(...)
             [RightClip] = { Position = UDim2.fromOffset(Left + Width, TabHalf); Size = UDim2.new(1, -(Left + Width), 0, TabLower) };
         };
 
-        if TabGap then
+        if ActiveLower then
             -- as wide as the tab plus the corners turning away from it, kept off the content box's side borders
             local From, To = math.max(Left - TAB_RADIUS, 1), math.min(Left + Width + TAB_RADIUS, BarWidth);
-            Goals[TabGap] = { Position = UDim2.fromOffset(From, TAB_HEIGHT + 1); Size = UDim2.fromOffset(To - From + 1, 1) };
+            Goals[ActiveLower] = { Position = UDim2.fromOffset(From, TabHalf); Size = UDim2.fromOffset(To - From + 1, TabLower) };
+        end;
+
+        if UpperLeftClip then
+            Goals[UpperLeftClip] = { Size = UDim2.fromOffset(Left + 1, TabHalf) };
+            Goals[UpperRightClip] = { Position = UDim2.fromOffset(Left + Width, 0); Size = UDim2.new(1, -(Left + Width), 0, TabHalf) };
         end;
 
         for Object, Goal in next, Goals do
@@ -5924,19 +6034,6 @@ function Library:CreateWindow(...)
         MainSectionOuter.BackgroundTransparency = 1;
         MainSectionInner.BackgroundTransparency = 1;
         TabContainer.BackgroundTransparency = 1;
-
-        -- the tab bar right of the last tab: same shade and bottom line as an inactive tab; Window:AddTab places it
-        TabFiller = Library:Create('Frame', {
-            BackgroundColor3 = Library.BackgroundColor;
-            BackgroundTransparency = TAB_SHADE;
-            BorderSizePixel = 0;
-            Position = TabArea.Position;
-            Size = TabArea.Size;
-            ZIndex = 1;
-            Parent = MainSectionInner;
-        });
-
-        Library:AddToRegistry(TabFiller, { BackgroundColor3 = 'BackgroundColor' });
 
         -- The content box's outline: its own border is as clear as its background. Left, right and bottom only; the
         -- top edge is the tab bar's bottom line (TabOutline), open under the active tab.
@@ -5996,33 +6093,28 @@ function Library:CreateWindow(...)
         -- VS Code style tab: a box with a divider on its right and the name dimmed while inactive. The active one takes
         -- the content's shade, loses its bottom line and gets the accent line on top (Window:MoveUnderline).
         local TabButton = Library:Create('Frame', {
-            BackgroundColor3 = Glass and Library.BackgroundColor or Library.MainColor;
-            BackgroundTransparency = TabOff;
+            BackgroundTransparency = 1; -- the bar's shades are on the outline pieces (TabOutline), under the name
             BorderSizePixel = 0;
             Size = UDim2.new(0, TabButtonWidth + TAB_PADDING * 2, 1, 0);
             ZIndex = 1;
             Parent = TabArea;
         });
 
-        Library:AddToRegistry(TabButton, {
-            BackgroundColor3 = Glass and 'BackgroundColor' or 'MainColor';
-        });
+        -- as between VS Code's inactive tabs: fainter than the outline, half the tab's height, centred;
+        -- Window:MoveUnderline hides the ones the outline replaces
+        Tab.Divider = Line({ AnchorPoint = Vector2.new(1, 0.5); BackgroundTransparency = 0.5; Position = UDim2.new(1, 0, 0.5, 0); Size = UDim2.new(0, 1, 0.5, 0); ZIndex = 5; Parent = TabButton });
 
-        -- fainter than the outline, as between VS Code's inactive tabs; Window:MoveUnderline hides the ones the outline replaces
-        Tab.Divider = Line({ AnchorPoint = Vector2.new(1, 0); BackgroundTransparency = 0.5; Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, 1, 1, 0); ZIndex = 2; Parent = TabButton });
-
-        if TabFiller then
-            Window.TabsWidth = (Window.TabsWidth or 0) + TabButton.Size.X.Offset + Config.TabPadding;
-            TabFiller.Position = TabArea.Position + UDim2.fromOffset(Window.TabsWidth, 0);
-            TabFiller.Size = TabArea.Size - UDim2.fromOffset(Window.TabsWidth, 0);
-        end;
+        Tab.Button = TabButton; -- Window:MoveUnderline puts the outline around it
+        Tab.NaturalWidth = TabButton.Size.X.Offset;
+        table.insert(AllTabs, Tab);
+        FitTabs();
 
         local TabButtonLabel = Library:CreateLabel({
             Position = UDim2.new(0, 0, 0, 0);
             Size = UDim2.new(1, 0, 1, 0);
             Text = Name;
             TextTransparency = 0.45;
-            ZIndex = 1;
+            ZIndex = 6; -- over the bar's shades and outline
             Parent = TabButton;
         });
 
@@ -6030,8 +6122,6 @@ function Library:CreateWindow(...)
         if TabLabelStroke then
             TabLabelStroke.Transparency = 0.45;
         end;
-
-        Tab.Button = TabButton; -- Window:MoveUnderline puts the shared bar under it
 
         local TabTweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
         local TabActive = false;
@@ -6054,10 +6144,6 @@ function Library:CreateWindow(...)
                 FadeTabLabel(0.45);
             end;
         end);
-
-        local function PaintTab()
-            TabButton.BackgroundTransparency = TabActive and TabOn or TabOff;
-        end;
 
         local TabFrame = Library:Create('Frame', {
             Name = 'TabFrame',
@@ -6151,7 +6237,6 @@ function Library:CreateWindow(...)
 
             Window.ActiveTab = Tab;
             TabActive = true;
-            PaintTab();
             FadeTabLabel(0);
             Window:MoveUnderline(Previous == nil); -- slides from the previous tab; the first one just appears
 
@@ -6173,7 +6258,6 @@ function Library:CreateWindow(...)
         function Tab:HideTab()
             local WasActive = TabActive;
             TabActive = false;
-            PaintTab();
             FadeTabLabel(0.45);
 
             if not (WasActive and Library.Animations and (Window.SlideDirection or 0) ~= 0) then
@@ -7312,6 +7396,7 @@ local ThemeManager = {} do
 		if Library.Blur then -- frosted glass windows only: a script that set GlassTransparency = 0 keeps its solid menu
 			MenuGroup:AddSlider('MenuOpacity', { Text = 'Menu opacity', Default = math.floor((1 - Library.GlassTransparency) * 100 + 0.5), Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true, Tooltip = 'How solid the menu background is. Lower shows more of the blurred game behind it; 100% is solid and turns the blur off' })
 			Options.MenuOpacity:OnChanged(function(Value) Library:SetGlassTransparency(1 - Value / 100) end)
+			MenuGroup:AddToggle('BlurBillboards', { Text = 'Blur name tags', Default = true, Tooltip = 'While the menu is open, the game\'s name tags, health bars and damage numbers blur with the scene behind it. Until it closes, walls and characters can cover them. Does nothing when the blur itself is not drawn (low graphics)', Callback = function(Value) Library.BlurBillboards = Value end })
 		end
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
