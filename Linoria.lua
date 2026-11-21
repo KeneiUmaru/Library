@@ -5563,6 +5563,29 @@ function Library:CreateWindow(...)
         Tabs = {};
     };
 
+    -- Tab backgrounds (Window:AddTab). Glass: the window tint is the content shade, so inactive tabs and the rest of
+    -- the bar are darkened over it. Solid: the bar is already the darker color, so only the active tab is filled.
+    local Glass = Library.GlassTransparency > 0;
+    local TAB_SHADE = 0.4;
+    local TAB_HEIGHT, TAB_PADDING = 26, 12; -- VS Code proportions: room above / below and either side of the name
+    local TAB_RADIUS = 5;                   -- corners of the outline around the active tab
+    local TabOn, TabOff = Glass and 1 or 0, Glass and TAB_SHADE or 1;
+    local TabFiller;
+
+    -- 1px outline pieces of the tab bar and content box. On glass the theme's outline color sinks into the blurred
+    -- scene behind it, so it is lifted toward the font color (as the off toggle boxes are).
+    local function LineColor()
+        return Glass and Library.OutlineColor:Lerp(Library.FontColor, 0.2) or Library.OutlineColor;
+    end;
+
+    local function Line(Properties)
+        Properties.BackgroundColor3 = LineColor();
+        Properties.BorderSizePixel = 0;
+        local Frame = Library:Create('Frame', Properties);
+        Library:AddToRegistry(Frame, { BackgroundColor3 = LineColor });
+        return Frame;
+    end;
+
     local Outer = Library:Create('Frame', {
         AnchorPoint = Config.AnchorPoint,
         BackgroundColor3 = Color3.new(0, 0, 0);
@@ -5734,7 +5757,7 @@ function Library:CreateWindow(...)
     local TabArea = Library:Create('Frame', {
         BackgroundTransparency = 1;
         Position = UDim2.new(0, 8, 0, 8);
-        Size = UDim2.new(1, -16, 0, 21);
+        Size = UDim2.new(1, -16, 0, TAB_HEIGHT);
         ZIndex = 1;
         Parent = MainSectionInner;
     });
@@ -5747,20 +5770,79 @@ function Library:CreateWindow(...)
     });
     Window.TabListLayout = TabListLayout; -- the resize grip keeps the window at least this wide
 
-    -- One accent bar under the tab names that slides to the active tab (like the tabbox one). It lives beside the
+    -- One accent line along the top edge of the active tab (VS Code style) that slides to it. It lives beside the
     -- strip, which a UIListLayout arranges, and reads the active button's laid-out position.
     local WindowUnderline = Library:Create('Frame', {
-        AnchorPoint = Vector2.new(0.5, 1);
+        AnchorPoint = Vector2.new(0.5, 0);
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
-        Size = UDim2.new(0, 0, 0, 2);
-        ZIndex = 2;
+        Size = UDim2.new(0, 0, 0, 1);
+        ZIndex = 5;
         Parent = MainSectionInner;
     });
 
     Library:AddToRegistry(WindowUnderline, {
         BackgroundColor3 = 'AccentColor';
     });
+
+    -- Tab bar outline, VS Code style: a line along the top, and one along the bottom that turns up either side of
+    -- the active tab into its outline, every turn rounded. Three stroked rounded boxes, each seen through a clip that
+    -- shows only its part: the top half of the active tab's box (its top corners), and the bottom half of a box left
+    -- and right of it (the bottom corners). A box runs TabReach px past its clip wherever its edge must not show.
+    -- The layer is 1px larger than the tab strip all round; Window:MoveUnderline slides the pieces to the active tab.
+    local TabHalf, TabReach = math.floor((TAB_HEIGHT + 2) / 2), TAB_RADIUS + 4;
+    local TabLower = TAB_HEIGHT + 2 - TabHalf;
+    local TabOutline = Library:Create('Frame', {
+        BackgroundTransparency = 1;
+        Position = TabArea.Position - UDim2.fromOffset(1, 1);
+        Size = TabArea.Size + UDim2.fromOffset(2, 2);
+        ZIndex = 4;
+        Parent = MainSectionInner;
+    });
+
+    Line({ Size = UDim2.new(1, 0, 0, 1); ZIndex = 4; Parent = TabOutline });
+
+    local function OutlinePiece(ClipProperties, BoxProperties)
+        ClipProperties.BackgroundTransparency = 1;
+        ClipProperties.ClipsDescendants = true;
+        ClipProperties.ZIndex = 4;
+        ClipProperties.Parent = TabOutline;
+        local Clip = Library:Create('Frame', ClipProperties);
+
+        BoxProperties.BackgroundTransparency = 1;
+        BoxProperties.ZIndex = 4;
+        BoxProperties.Parent = Clip;
+        local Box = Library:Create('Frame', BoxProperties);
+
+        Library:Create('UICorner', { CornerRadius = UDim.new(0, TAB_RADIUS); Parent = Box });
+        Library:AddToRegistry(Library:Create('UIStroke', {
+            Color = LineColor();
+            Thickness = 1;
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+            Parent = Box;
+        }), { Color = LineColor });
+
+        return Clip, Box;
+    end;
+
+    local ActiveClip, ActiveBox = OutlinePiece({}, { Position = UDim2.fromOffset(1, 1) });
+    local LeftClip, LeftBox = OutlinePiece({ Position = UDim2.fromOffset(0, TabHalf) }, { Position = UDim2.fromOffset(-TabReach, -TabReach) });
+    local RightClip = OutlinePiece({}, {
+        Position = UDim2.fromOffset(1, -TabReach);
+        Size = UDim2.new(1, TabReach - 1, 0, TabLower - 1 + TabReach);
+    });
+
+    -- Solid menu: the content box's top border runs along the bar's bottom row; this hides it under the active tab.
+    local TabGap = not Glass and Library:Create('Frame', {
+        BackgroundColor3 = Library.MainColor;
+        BorderSizePixel = 0;
+        ZIndex = 3;
+        Parent = TabOutline;
+    });
+
+    if TabGap then
+        Library:AddToRegistry(TabGap, { BackgroundColor3 = 'MainColor' });
+    end;
 
     function Window:MoveUnderline(Instant)
         local Tab = Window.ActiveTab;
@@ -5772,18 +5854,43 @@ function Library:CreateWindow(...)
         local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
         local Scale = math.max(ScaleObject and ScaleObject.Scale or 1, 0.01);
         local Width = Tab.Button.Size.X.Offset;
-        -- rounded: UDim offsets are whole numbers and would otherwise truncate (1-2px left of centre at scale 1.3)
-        local X = math.floor((Tab.Button.AbsolutePosition.X - TabArea.AbsolutePosition.X) / Scale + Width / 2 + 0.5);
-        local Goal = {
-            Position = UDim2.fromOffset(TabArea.Position.X.Offset + X, TabArea.Position.Y.Offset + TabArea.Size.Y.Offset);
-            Size = UDim2.fromOffset(Width - 6, 2);
+        -- rounded: UDim offsets are whole numbers and would otherwise truncate (1-2px off at scale 1.3)
+        local Left = math.floor((Tab.Button.AbsolutePosition.X - TabArea.AbsolutePosition.X) / Scale + 0.5);
+        local BarWidth = math.floor(TabArea.AbsoluteSize.X / Scale + 0.5);
+        -- In TabOutline columns the active tab's outline stands on Left and Left + Width.
+        local Goals = {
+            [WindowUnderline] = { -- on the top line, between the rounded corners
+                Position = UDim2.fromOffset(TabArea.Position.X.Offset + Left + math.floor(Width / 2), TabArea.Position.Y.Offset - 1);
+                Size = UDim2.fromOffset(Width - TAB_RADIUS * 2 - 2, 1);
+            };
+            [ActiveClip] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width + 1, TabHalf) };
+            [ActiveBox] = { Size = UDim2.fromOffset(Width - 1, TAB_HEIGHT + TabReach) };
+            [LeftClip] = { Size = UDim2.fromOffset(Left + 1, TabLower) };
+            -- first tab active: there is no bar left of it, so the box also runs past the bottom and its side goes
+            -- straight down into the content box's outline
+            [LeftBox] = { Size = UDim2.fromOffset(Left + TabReach, TabLower - 1 + TabReach + (Left == 0 and TabReach or 0)) };
+            [RightClip] = { Position = UDim2.fromOffset(Left + Width, TabHalf); Size = UDim2.new(1, -(Left + Width), 0, TabLower) };
         };
 
-        if Instant then
-            Library:Create(WindowUnderline, Goal);
-        else
-            Library:Animate(WindowUnderline, 0.2, Goal);
+        if TabGap then
+            -- as wide as the tab plus the corners turning away from it, kept off the content box's side borders
+            local From, To = math.max(Left - TAB_RADIUS, 1), math.min(Left + Width + TAB_RADIUS, BarWidth);
+            Goals[TabGap] = { Position = UDim2.fromOffset(From, TAB_HEIGHT + 1); Size = UDim2.fromOffset(To - From + 1, 1) };
         end;
+
+        for Object, Goal in next, Goals do
+            if Instant then
+                Library:Create(Object, Goal);
+            else
+                Library:Animate(Object, 0.2, Goal);
+            end;
+        end;
+
+        -- the outline already stands on the active tab's two edges
+        for _, Other in next, Window.Tabs do
+            Other.Divider.Visible = not (Other == Tab or Other.Index + 1 == Tab.Index);
+        end;
+        Tab.Divider.Visible = false; -- the first tab is shown before it is in Window.Tabs
     end;
 
     -- tabs added or reordered move the active button: put the bar back under it
@@ -5794,8 +5901,8 @@ function Library:CreateWindow(...)
     local TabContainer = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
         BorderColor3 = Library.OutlineColor;
-        Position = UDim2.new(0, 8, 0, 30);
-        Size = UDim2.new(1, -16, 1, -38);
+        Position = UDim2.new(0, 8, 0, 8 + TAB_HEIGHT + 1);
+        Size = UDim2.new(1, -16, 1, -(8 + TAB_HEIGHT + 1 + 8));
         ClipsDescendants = true; -- tab content slides in from the sides (Tab:ShowTab)
         ZIndex = 2;
         Parent = MainSectionInner;
@@ -5808,12 +5915,32 @@ function Library:CreateWindow(...)
     });
 
     -- Frosted glass: only Inner tints the window; the layers stacked on it go clear so the blur shows through.
-    if Library.GlassTransparency > 0 then
+    if Glass then
         Outer.BackgroundTransparency = 1;
         Inner.BackgroundTransparency = Library.GlassTransparency;
         MainSectionOuter.BackgroundTransparency = 1;
         MainSectionInner.BackgroundTransparency = 1;
         TabContainer.BackgroundTransparency = 1;
+
+        -- the tab bar right of the last tab: same shade and bottom line as an inactive tab; Window:AddTab places it
+        TabFiller = Library:Create('Frame', {
+            BackgroundColor3 = Library.BackgroundColor;
+            BackgroundTransparency = TAB_SHADE;
+            BorderSizePixel = 0;
+            Position = TabArea.Position;
+            Size = TabArea.Size;
+            ZIndex = 1;
+            Parent = MainSectionInner;
+        });
+
+        Library:AddToRegistry(TabFiller, { BackgroundColor3 = 'BackgroundColor' });
+
+        -- The content box's outline: its own border is as clear as its background. Left, right and bottom only; the
+        -- top edge is the tab bar's bottom line (TabOutline), open under the active tab.
+        local Top = TabContainer.Position.Y.Offset - 1;
+        Line({ Position = UDim2.new(0, 7, 0, Top); Size = UDim2.new(0, 1, 1, -Top - 7); ZIndex = 3; Parent = MainSectionInner });
+        Line({ Position = UDim2.new(1, -8, 0, Top); Size = UDim2.new(0, 1, 1, -Top - 7); ZIndex = 3; Parent = MainSectionInner });
+        Line({ Position = UDim2.new(0, 7, 1, -8); Size = UDim2.new(1, -14, 0, 1); ZIndex = 3; Parent = MainSectionInner });
 
         Library:AddGlass(Outer, function()
             return Outer.Visible, Library.Toggled;
@@ -5863,23 +5990,33 @@ function Library:CreateWindow(...)
 
         local TabButtonWidth = Library:GetTextBounds(Name, Library.Font, 16);
 
-        -- Underline tab: the name (dimmed while inactive) over an accent bar that opens on the active tab.
+        -- VS Code style tab: a box with a divider on its right and the name dimmed while inactive. The active one takes
+        -- the content's shade, loses its bottom line and gets the accent line on top (Window:MoveUnderline).
         local TabButton = Library:Create('Frame', {
-            BackgroundColor3 = Library.BackgroundColor;
-            BackgroundTransparency = 1;
+            BackgroundColor3 = Glass and Library.BackgroundColor or Library.MainColor;
+            BackgroundTransparency = TabOff;
             BorderSizePixel = 0;
-            Size = UDim2.new(0, TabButtonWidth + 8 + 4, 1, 0);
+            Size = UDim2.new(0, TabButtonWidth + TAB_PADDING * 2, 1, 0);
             ZIndex = 1;
             Parent = TabArea;
         });
 
         Library:AddToRegistry(TabButton, {
-            BackgroundColor3 = 'BackgroundColor';
+            BackgroundColor3 = Glass and 'BackgroundColor' or 'MainColor';
         });
+
+        -- fainter than the outline, as between VS Code's inactive tabs; Window:MoveUnderline hides the ones the outline replaces
+        Tab.Divider = Line({ AnchorPoint = Vector2.new(1, 0); BackgroundTransparency = 0.5; Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, 1, 1, 0); ZIndex = 2; Parent = TabButton });
+
+        if TabFiller then
+            Window.TabsWidth = (Window.TabsWidth or 0) + TabButton.Size.X.Offset + Config.TabPadding;
+            TabFiller.Position = TabArea.Position + UDim2.fromOffset(Window.TabsWidth, 0);
+            TabFiller.Size = TabArea.Size - UDim2.fromOffset(Window.TabsWidth, 0);
+        end;
 
         local TabButtonLabel = Library:CreateLabel({
             Position = UDim2.new(0, 0, 0, 0);
-            Size = UDim2.new(1, 0, 1, -3);
+            Size = UDim2.new(1, 0, 1, 0);
             Text = Name;
             TextTransparency = 0.45;
             ZIndex = 1;
@@ -5915,19 +6052,9 @@ function Library:CreateWindow(...)
             end;
         end);
 
-        local Blocker = Library:Create('Frame', {
-            BackgroundColor3 = Library.MainColor;
-            BorderSizePixel = 0;
-            Position = UDim2.new(0, 0, 1, 0);
-            Size = UDim2.new(1, 0, 0, 1);
-            BackgroundTransparency = 1;
-            ZIndex = 3;
-            Parent = TabButton;
-        });
-
-        Library:AddToRegistry(Blocker, {
-            BackgroundColor3 = 'MainColor';
-        });
+        local function PaintTab()
+            TabButton.BackgroundTransparency = TabActive and TabOn or TabOff;
+        end;
 
         local TabFrame = Library:Create('Frame', {
             Name = 'TabFrame',
@@ -6021,6 +6148,7 @@ function Library:CreateWindow(...)
 
             Window.ActiveTab = Tab;
             TabActive = true;
+            PaintTab();
             FadeTabLabel(0);
             Window:MoveUnderline(Previous == nil); -- slides from the previous tab; the first one just appears
 
@@ -6042,6 +6170,7 @@ function Library:CreateWindow(...)
         function Tab:HideTab()
             local WasActive = TabActive;
             TabActive = false;
+            PaintTab();
             FadeTabLabel(0.45);
 
             if not (WasActive and Library.Animations and (Window.SlideDirection or 0) ~= 0) then
