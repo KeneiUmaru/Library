@@ -6026,6 +6026,13 @@ function Library:CreateWindow(...)
     -- Title bar. On glass the box under it is clear, so the title is centred between the window's top edge and the
     -- tab bar 8px further down: 10px above and below the text, as in VS Code's title bar.
     local TITLE_HEIGHT = 28;
+    -- Margins at the window's sides and bottom, kept small so the sections sit close to its edge (they added up to
+    -- 24 px of empty frame each side: 8 + 8 + 7).
+    --   WINDOW_PAD: window edge to the panel under the title. On glass that panel is clear, so the margin was all air.
+    --   PANEL_PAD:  that panel to the tab bar and the content box.
+    --   COLUMN_PAD: the content box to the two columns of sections.
+    local WINDOW_PAD = Glass and 2 or 8;
+    local PANEL_PAD, COLUMN_PAD = 4, 4;
 
     -- 1px outline pieces of the tab bar and content box. On glass the theme's outline color sinks into the blurred
     -- scene behind it, so it is lifted toward the font color (as the off toggle boxes are).
@@ -6186,8 +6193,8 @@ function Library:CreateWindow(...)
     local MainSectionOuter = Library:Create('Frame', {
         BackgroundColor3 = Library.BackgroundColor;
         BorderColor3 = Library.OutlineColor;
-        Position = UDim2.new(0, 8, 0, TITLE_HEIGHT);
-        Size = UDim2.new(1, -16, 1, -(TITLE_HEIGHT + 8));
+        Position = UDim2.new(0, WINDOW_PAD, 0, TITLE_HEIGHT);
+        Size = UDim2.new(1, -WINDOW_PAD * 2, 1, -(TITLE_HEIGHT + WINDOW_PAD));
         ZIndex = 1;
         Parent = Inner;
     });
@@ -6217,8 +6224,8 @@ function Library:CreateWindow(...)
     local TabArea = Library:Create('ScrollingFrame', {
         BackgroundTransparency = 1;
         BorderSizePixel = 0;
-        Position = UDim2.new(0, 8, 0, 8);
-        Size = UDim2.new(1, -16, 0, TAB_HEIGHT);
+        Position = UDim2.new(0, PANEL_PAD, 0, 8);
+        Size = UDim2.new(1, -PANEL_PAD * 2, 0, TAB_HEIGHT);
         CanvasSize = UDim2.new();
         ScrollingDirection = Enum.ScrollingDirection.X;
         ElasticBehavior = Enum.ElasticBehavior.Never;
@@ -6463,8 +6470,8 @@ function Library:CreateWindow(...)
     local TabContainer = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
         BorderColor3 = Library.OutlineColor;
-        Position = UDim2.new(0, 8, 0, 8 + TAB_HEIGHT + 1);
-        Size = UDim2.new(1, -16, 1, -(8 + TAB_HEIGHT + 1 + 8));
+        Position = UDim2.new(0, PANEL_PAD, 0, 8 + TAB_HEIGHT + 1);
+        Size = UDim2.new(1, -PANEL_PAD * 2, 1, -(8 + TAB_HEIGHT + 1 + PANEL_PAD));
         ClipsDescendants = true; -- tab content slides in from the sides (Tab:ShowTab)
         ZIndex = 2;
         Parent = MainSectionInner;
@@ -6487,9 +6494,13 @@ function Library:CreateWindow(...)
         -- The content box's outline: its own border is as clear as its background. Left, right and bottom only; the
         -- top edge is the tab bar's bottom line (TabOutline), open under the active tab.
         local Top = TabContainer.Position.Y.Offset - 1;
-        Line({ Position = UDim2.new(0, 7, 0, Top); Size = UDim2.new(0, 1, 1, -Top - 7); ZIndex = 3; Parent = MainSectionInner });
-        Line({ Position = UDim2.new(1, -8, 0, Top); Size = UDim2.new(0, 1, 1, -Top - 7); ZIndex = 3; Parent = MainSectionInner });
-        Line({ Position = UDim2.new(0, 7, 1, -8); Size = UDim2.new(1, -14, 0, 1); ZIndex = 3; Parent = MainSectionInner });
+        local Edge = PANEL_PAD - 1; -- the outline stands one px outside the box
+        Line({ Position = UDim2.new(0, Edge, 0, Top); Size = UDim2.new(0, 1, 1, -Top - Edge); ZIndex = 3; Parent = MainSectionInner });
+        -- Both stop GRIP_GAP px short of the bottom right corner: the resize grip's dots sit there, and with the box
+        -- this close to the window's edge its outline ran through them.
+        local GRIP_GAP = 6;
+        Line({ Position = UDim2.new(1, -PANEL_PAD, 0, Top); Size = UDim2.new(0, 1, 1, -Top - Edge - GRIP_GAP); ZIndex = 3; Parent = MainSectionInner });
+        Line({ Position = UDim2.new(0, Edge, 1, -PANEL_PAD); Size = UDim2.new(1, -Edge * 2 - GRIP_GAP, 0, 1); ZIndex = 3; Parent = MainSectionInner });
 
         Library:AddGlass(Outer, function()
             return Outer.Visible, Library.Toggled;
@@ -6607,8 +6618,8 @@ function Library:CreateWindow(...)
         local LeftSide = Library:Create('ScrollingFrame', {
             BackgroundTransparency = 1;
             BorderSizePixel = 0;
-            Position = UDim2.new(0, 8 - 1, 0, 8 - 1);
-            Size = UDim2.new(0.5, -12 + 2, 1, -14);
+            Position = UDim2.new(0, COLUMN_PAD, 0, COLUMN_PAD);
+            Size = UDim2.new(0.5, -(COLUMN_PAD + 4), 1, -COLUMN_PAD * 2);
             CanvasSize = UDim2.new(0, 0, 0, 0);
             BottomImage = '';
             TopImage = '';
@@ -6620,8 +6631,8 @@ function Library:CreateWindow(...)
         local RightSide = Library:Create('ScrollingFrame', {
             BackgroundTransparency = 1;
             BorderSizePixel = 0;
-            Position = UDim2.new(0.5, 4 + 1, 0, 8 - 1);
-            Size = UDim2.new(0.5, -12 + 2, 1, -14);
+            Position = UDim2.new(0.5, 4, 0, COLUMN_PAD);
+            Size = UDim2.new(0.5, -(COLUMN_PAD + 4), 1, -COLUMN_PAD * 2);
             CanvasSize = UDim2.new(0, 0, 0, 0);
             BottomImage = '';
             TopImage = '';
@@ -7339,6 +7350,12 @@ function Library:CreateWindow(...)
 
         if TransparencyCache[Inner] then
             TransparencyCache[Inner].BackgroundTransparency = Value;
+        end;
+
+        -- Still fading in: that tween would carry on to the old value, and the menu kept it from then on. A saved
+        -- opacity arriving at script start, while the menu opens, was lost this way. A new tween replaces it.
+        if Window.Fading and Library.Toggled then
+            Library:Animate(Inner, 0, { BackgroundTransparency = Value });
         end;
 
         for _, Section in next, Library.Sections do
