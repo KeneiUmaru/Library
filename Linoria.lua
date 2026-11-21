@@ -6880,8 +6880,8 @@ function Library:CreateWindow(...)
 
             local Container = Library:Create('Frame', {
                 BackgroundTransparency = 1;
-                Position = UDim2.new(0, 4, 0, 20);
-                Size = UDim2.new(1, -4, 1, -20);
+                Position = UDim2.new(0, 8, 0, 20); -- 8 px clear of the side lines; the controls leave 4 on the right themselves
+                Size = UDim2.new(1, -12, 1, -20);
                 ZIndex = 1;
                 Parent = BoxInner;
             });
@@ -7217,8 +7217,8 @@ function Library:CreateWindow(...)
 
                 local Container = Library:Create('Frame', {
                     BackgroundTransparency = 1;
-                    Position = UDim2.new(0, 4, 0, ContentTop);
-                    Size = UDim2.new(1, -4, 1, -ContentTop);
+                    Position = UDim2.new(0, 8, 0, ContentTop);
+                    Size = UDim2.new(1, -12, 1, -ContentTop);
                     ZIndex = 1;
                     Visible = false;
                     Parent = BoxInner;
