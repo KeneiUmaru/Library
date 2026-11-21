@@ -2298,8 +2298,8 @@ do
         end
 
         local PickOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+            BorderSizePixel = 0;
             Size = UDim2.new(0, 28, 0, 15);
             ZIndex = 6;
             Parent = ToggleLabel;
@@ -2935,8 +2935,8 @@ do
 
         local function CreateBaseButton(Button)
             local Outer = Library:Create('Frame', {
-                BackgroundColor3 = Color3.new(0, 0, 0);
-                BorderColor3 = Color3.new(0, 0, 0);
+                BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+                BorderSizePixel = 0;
                 Size = UDim2.new(1, -4, 0, 20);
                 ZIndex = 5;
             });
@@ -2967,18 +2967,14 @@ do
                 Parent = Inner;
             });
 
-            Library:AddToRegistry(Outer, {
-                BorderColor3 = 'Black';
-            });
-
             Library:AddToRegistry(Inner, {
                 BackgroundColor3 = 'MainColor';
                 BorderColor3 = 'OutlineColor';
             });
 
-            Library:OnHighlight(Outer, Outer,
+            Library:OnHighlight(Outer, Inner,
                 { BorderColor3 = 'AccentColor' },
-                { BorderColor3 = 'Black' }
+                { BorderColor3 = 'OutlineColor' }
             );
 
             return Outer, Inner, Label
@@ -3118,8 +3114,8 @@ do
 
         Groupbox:AddBlank(2);
         local DividerOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+            BorderSizePixel = 0;
             Size = UDim2.new(1, -4, 0, 5);
             ZIndex = 5;
             Parent = Container;
@@ -3132,10 +3128,6 @@ do
             Size = UDim2.new(1, 0, 1, 0);
             ZIndex = 6;
             Parent = DividerOuter;
-        });
-
-        Library:AddToRegistry(DividerOuter, {
-            BorderColor3 = 'Black';
         });
 
         Library:AddToRegistry(DividerInner, {
@@ -3174,8 +3166,8 @@ do
         Groupbox:AddBlank(1);
 
         local TextBoxOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+            BorderSizePixel = 0;
             Size = UDim2.new(1, -4, 0, 20);
             ZIndex = 5;
             Parent = Container;
@@ -3195,9 +3187,9 @@ do
             BorderColor3 = 'OutlineColor';
         });
 
-        Library:OnHighlight(TextBoxOuter, TextBoxOuter,
+        Library:OnHighlight(TextBoxOuter, TextBoxInner,
             { BorderColor3 = 'AccentColor' },
-            { BorderColor3 = 'Black' }
+            { BorderColor3 = 'OutlineColor' }
         );
 
         if type(Info.Tooltip) == 'string' then
@@ -3633,15 +3625,11 @@ do
         end
 
         local SliderOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+            BorderSizePixel = 0;
             Size = UDim2.new(1, -4, 0, 13);
             ZIndex = 5;
             Parent = Container;
-        });
-
-        Library:AddToRegistry(SliderOuter, {
-            BorderColor3 = 'Black';
         });
 
         local SliderInner = Library:Create('Frame', {
@@ -3696,9 +3684,9 @@ do
             Parent = SliderInner;
         });
 
-        Library:OnHighlight(SliderOuter, SliderOuter,
+        Library:OnHighlight(SliderOuter, SliderInner,
             { BorderColor3 = 'AccentColor' },
-            { BorderColor3 = 'Black' }
+            { BorderColor3 = 'OutlineColor' }
         );
 
         if type(Info.Tooltip) == 'string' then
@@ -3915,15 +3903,11 @@ do
         Groupbox:AddBlank(2);
 
         local BarOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+            BorderSizePixel = 0;
             Size = UDim2.new(1, -4, 0, 8);
             ZIndex = 5;
             Parent = Container;
-        });
-
-        Library:AddToRegistry(BarOuter, {
-            BorderColor3 = 'Black';
         });
 
         local BarInner = Library:Create('Frame', {
@@ -4241,15 +4225,11 @@ do
         end;
 
         local DropdownOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
+            BackgroundTransparency = 1; -- no black frame: the inner frame's outline is the control's edge
+            BorderSizePixel = 0;
             Size = UDim2.new(1, -4, 0, 20);
             ZIndex = 5;
             Parent = Container;
-        });
-
-        Library:AddToRegistry(DropdownOuter, {
-            BorderColor3 = 'Black';
         });
 
         local DropdownInner = Library:Create('Frame', {
@@ -4307,9 +4287,9 @@ do
         });
         AddTextScroll(ItemList, ItemClip, DropdownOuter, true);
 
-        Library:OnHighlight(DropdownOuter, DropdownOuter,
+        Library:OnHighlight(DropdownOuter, DropdownInner,
             { BorderColor3 = 'AccentColor' },
-            { BorderColor3 = 'Black' }
+            { BorderColor3 = 'OutlineColor' }
         );
 
         if Info.Tooltip or Info.ValueTooltips then
@@ -5829,6 +5809,10 @@ function Library:RegisterSection(Info)
         Section.Inner = Info.Inner; -- tinted by Library:UpdateSectionButtons
         Info.Outer.BackgroundTransparency = 1;
         Info.Inner.BackgroundTransparency = 0.75;
+        -- A border is as see-through as its frame's background: the outer one (outline color) vanished with it, and
+        -- the inner black one was left as a near-black line around every box. The boxes draw their outline as lines
+        -- instead (Tab:AddGroupbox / Tab:AddTabbox).
+        Info.Inner.BorderSizePixel = 0;
 
         Library:AddGlass(Info.Outer, function()
             local Shown = Section.Floating and Section.Holder ~= nil and Section.Holder.Visible;
@@ -5925,8 +5909,11 @@ local function TreeFadeProperties(Instance)
 end;
 
 -- Delay (optional): seconds before the tween starts; a tree being shown goes transparent at once and waits.
+-- Rest.Tweens: the fades started with this Rest, so RestoreTree can stop the ones still running.
 function Library:FadeTree(Root, Visible, Time, Rest, Delay)
     Rest = Rest or {};
+    local Tweens = Rest.Tweens or {};
+    Rest.Tweens = Tweens;
     local Info = TweenInfo.new(Time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, Delay or 0);
 
     local List = Root:GetDescendants();
@@ -5961,7 +5948,9 @@ function Library:FadeTree(Root, Visible, Time, Rest, Delay)
             end;
 
             if next(Goal) then
-                TweenService:Create(Desc, Info, Goal):Play();
+                local Tween = TweenService:Create(Desc, Info, Goal);
+                Tweens[#Tweens + 1] = Tween;
+                Tween:Play();
             end;
         end;
     end;
@@ -5970,7 +5959,18 @@ function Library:FadeTree(Root, Visible, Time, Rest, Delay)
 end;
 
 function Library:RestoreTree(Rest)
-    for Desc, Saved in next, Rest or {} do
+    if not Rest then
+        return;
+    end;
+
+    -- a fade still running would carry on over the values put back here (a tab hidden mid slide went on fading
+    -- out, and stayed invisible, once the menu's own fade no longer ran over every instance)
+    for _, Tween in next, Rest.Tweens or {} do
+        Tween:Cancel();
+    end;
+    Rest.Tweens = nil;
+
+    for Desc, Saved in next, Rest do
         for Property, Value in next, Saved do
             pcall(function()
                 Desc[Property] = Value;
@@ -6110,10 +6110,8 @@ function Library:CreateWindow(...)
             -- pointer moves in screen pixels; Size is unscaled UI pixels, Position is screen pixels
             local Scale = math.max(Library.UIScale or 1, 0.01);
             local Delta = (Vector2.new(Mouse.X, Mouse.Y) - StartPointer) / Scale;
-            -- never narrower than the tab bar, or the last tabs run off the window
-            -- (their natural width: FitTabs stretches them over a nearly full bar, and would push the window wider)
-            local TabsWidth = (Window.TabsWidth or 0) + 40;
-            local Width = math.max(StartSize.X.Offset + Delta.X, MinWindowSize.X, TabsWidth);
+            -- it may get narrower than its tabs: the tab bar scrolls then (TabArea)
+            local Width = math.max(StartSize.X.Offset + Delta.X, MinWindowSize.X);
             local Height = math.max(StartSize.Y.Offset + Delta.Y, MinWindowSize.Y);
 
             Outer.Size = UDim2.new(StartSize.X.Scale, Width, StartSize.Y.Scale, Height);
@@ -6173,10 +6171,13 @@ function Library:CreateWindow(...)
 
     Library.WindowBorderGradient = Library.WindowBorderGradient or BorderGradient;
 
+    -- as wide as the window less a margin, and cut with "..." there: a zero-width label let a long title run out
+    -- past both edges of a narrowed window
     local WindowLabel = Library:CreateLabel({
-        Position = UDim2.new(0.5, 0, 0, 0);
-        Size = UDim2.new(0, 0, 0, TITLE_HEIGHT + (Glass and 8 or 0));
+        Position = UDim2.new(0, 10, 0, 0);
+        Size = UDim2.new(1, -20, 0, TITLE_HEIGHT + (Glass and 8 or 0));
         Text = Config.Title or '';
+        TextTruncate = Enum.TextTruncate.AtEnd;
         TextXAlignment = Enum.TextXAlignment.Center;
         ZIndex = 1;
         Parent = Inner;
@@ -6210,13 +6211,32 @@ function Library:CreateWindow(...)
         BackgroundColor3 = 'BackgroundColor';
     });
 
-    local TabArea = Library:Create('Frame', {
+    -- The tab strip scrolls sideways once the tabs no longer fit, as VS Code's does: the mouse wheel or a swipe moves
+    -- it, a tab that is opened scrolls into view (Window:RevealTab), and a thin bar along its bottom edge shows while
+    -- the pointer is over it (always on touch screens, which have no pointer).
+    local TabArea = Library:Create('ScrollingFrame', {
         BackgroundTransparency = 1;
+        BorderSizePixel = 0;
         Position = UDim2.new(0, 8, 0, 8);
         Size = UDim2.new(1, -16, 0, TAB_HEIGHT);
-        ZIndex = 1;
+        CanvasSize = UDim2.new();
+        ScrollingDirection = Enum.ScrollingDirection.X;
+        ElasticBehavior = Enum.ElasticBehavior.Never;
+        ScrollBarThickness = 2;
+        ScrollBarImageColor3 = Library.FontColor;
+        ScrollBarImageTransparency = IsMobile and 0.5 or 1;
+        TopImage = 'rbxasset://textures/ui/Scroll/scroll-middle.png';
+        BottomImage = 'rbxasset://textures/ui/Scroll/scroll-middle.png';
+        ZIndex = 7; -- its scroll bar over the bar's shades and names
         Parent = MainSectionInner;
     });
+
+    Library:AddToRegistry(TabArea, { ScrollBarImageColor3 = 'FontColor' });
+
+    if not IsMobile then
+        TabArea.MouseEnter:Connect(function() TabArea.ScrollBarImageTransparency = 0.5; end);
+        TabArea.MouseLeave:Connect(function() TabArea.ScrollBarImageTransparency = 1; end);
+    end;
 
     local TabListLayout = Library:Create('UIListLayout', {
         Padding = UDim.new(0, Config.TabPadding);
@@ -6249,24 +6269,16 @@ function Library:CreateWindow(...)
         end;
 
         Window.TabsWidth = Used;
+        TabArea.CanvasSize = UDim2.fromOffset(Used > BarWidth and Used or 0, 0); -- more tabs than fit: scroll
     end;
 
-    TabArea:GetPropertyChangedSignal('AbsoluteSize'):Connect(FitTabs);
+    TabArea:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+        FitTabs();
 
-    -- One accent line along the top edge of the active tab (VS Code style) that slides to it. It lives beside the
-    -- strip, which a UIListLayout arranges, and reads the active button's laid-out position.
-    local WindowUnderline = Library:Create('Frame', {
-        AnchorPoint = Vector2.new(0.5, 0);
-        BackgroundColor3 = Library.AccentColor;
-        BorderSizePixel = 0;
-        Size = UDim2.new(0, 0, 0, 1);
-        ZIndex = 5;
-        Parent = MainSectionInner;
-    });
-
-    Library:AddToRegistry(WindowUnderline, {
-        BackgroundColor3 = 'AccentColor';
-    });
+        if Window.ActiveTab then
+            Window:RevealTab(Window.ActiveTab); -- the window was narrowed: the active tab stays in the bar
+        end;
+    end);
 
     -- Tab bar outline, VS Code style: a line along the top, and one along the bottom that turns up either side of
     -- the active tab into its outline, every turn rounded. Three stroked rounded boxes, each seen through a clip that
@@ -6277,6 +6289,7 @@ function Library:CreateWindow(...)
     local TabLower = TAB_HEIGHT + 2 - TabHalf;
     local TabOutline = Library:Create('Frame', {
         BackgroundTransparency = 1;
+        ClipsDescendants = true; -- the active tab's outline goes with its tab when that is scrolled out of the bar
         Position = TabArea.Position - UDim2.fromOffset(1, 1);
         Size = TabArea.Size + UDim2.fromOffset(2, 2);
         ZIndex = 4;
@@ -6360,11 +6373,19 @@ function Library:CreateWindow(...)
         Library:AddToRegistry(ActiveLower, { BackgroundColor3 = 'MainColor' });
     end;
 
+    local OutlineTweens = {};
+
     function Window:MoveUnderline(Instant)
         local Tab = Window.ActiveTab;
         if not Tab then
             return;
         end;
+
+        -- a slide still running would carry on to where the tab was before the bar scrolled
+        for _, Tween in next, OutlineTweens do
+            Tween:Cancel();
+        end;
+        table.clear(OutlineTweens);
 
         -- AbsolutePosition is in screen px; the window's UIScale (menu scale and the open/close zoom) divides it out
         local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
@@ -6373,35 +6394,35 @@ function Library:CreateWindow(...)
         -- rounded: UDim offsets are whole numbers and would otherwise truncate (1-2px off at scale 1.3)
         local Left = math.floor((Tab.Button.AbsolutePosition.X - TabArea.AbsolutePosition.X) / Scale + 0.5);
         local BarWidth = math.floor(TabArea.AbsoluteSize.X / Scale + 0.5);
-        -- In TabOutline columns the active tab's outline stands on Left and Left + Width.
+        -- In TabOutline columns the active tab's outline stands on Left and Left + Width. Scrolled out past the left
+        -- end both are negative, past the right end both lie beyond the bar: the pieces either side of the tab are
+        -- then empty or the whole bar (never a negative size), and the layer clips the tab's own outline.
+        local LeftEnd = math.max(Left + 1, 0);
+        local RightStart = math.min(Left + Width, BarWidth + 2);
         local Goals = {
-            [WindowUnderline] = { -- on the top line, between the rounded corners
-                Position = UDim2.fromOffset(TabArea.Position.X.Offset + Left + math.floor(Width / 2), TabArea.Position.Y.Offset - 1);
-                Size = UDim2.fromOffset(Width - TAB_RADIUS * 2 - 2, 1);
-            };
             [ActiveClip] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width + 1, TabHalf) };
             [ActiveBox] = { Size = UDim2.fromOffset(Width - 1, TAB_HEIGHT + TabReach) };
-            [LeftClip] = { Size = UDim2.fromOffset(Left + 1, TabLower) };
-            [LeftBox] = { Size = UDim2.fromOffset(Left + TabReach, TabLower - 1 + TabReach) };
-            [RightClip] = { Position = UDim2.fromOffset(Left + Width, TabHalf); Size = UDim2.new(1, -(Left + Width), 0, TabLower) };
+            [LeftClip] = { Size = UDim2.fromOffset(LeftEnd, TabLower) };
+            [LeftBox] = { Size = UDim2.fromOffset(math.max(Left + TabReach, 0), TabLower - 1 + TabReach) };
+            [RightClip] = { Position = UDim2.fromOffset(RightStart, TabHalf); Size = UDim2.new(1, -RightStart, 0, TabLower) };
         };
 
         if ActiveLower then
             -- as wide as the tab plus the corners turning away from it, kept off the content box's side borders
             local From, To = math.max(Left - TAB_RADIUS, 1), math.min(Left + Width + TAB_RADIUS, BarWidth);
-            Goals[ActiveLower] = { Position = UDim2.fromOffset(From, TabHalf); Size = UDim2.fromOffset(To - From + 1, TabLower) };
+            Goals[ActiveLower] = { Position = UDim2.fromOffset(From, TabHalf); Size = UDim2.fromOffset(math.max(To - From + 1, 0), TabLower) };
         end;
 
         if UpperLeftClip then
-            Goals[UpperLeftClip] = { Size = UDim2.fromOffset(Left + 1, TabHalf) };
-            Goals[UpperRightClip] = { Position = UDim2.fromOffset(Left + Width, 0); Size = UDim2.new(1, -(Left + Width), 0, TabHalf) };
+            Goals[UpperLeftClip] = { Size = UDim2.fromOffset(LeftEnd, TabHalf) };
+            Goals[UpperRightClip] = { Position = UDim2.fromOffset(RightStart, 0); Size = UDim2.new(1, -RightStart, 0, TabHalf) };
         end;
 
         for Object, Goal in next, Goals do
             if Instant then
                 Library:Create(Object, Goal);
             else
-                Library:Animate(Object, 0.2, Goal);
+                table.insert(OutlineTweens, Library:Animate(Object, 0.2, Goal));
             end;
         end;
 
@@ -6416,6 +6437,28 @@ function Library:CreateWindow(...)
     TabListLayout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(function()
         Window:MoveUnderline(true);
     end);
+
+    -- and so does scrolling the strip
+    TabArea:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
+        Window:MoveUnderline(true);
+    end);
+
+    -- Scrolls the strip just far enough to show all of Tab (one clicked while half off an end, or opened from code).
+    function Window:RevealTab(Tab)
+        local View, Canvas = TabArea.AbsoluteSize.X, TabArea.CanvasPosition.X;
+        local Left = Tab.Button.AbsolutePosition.X - TabArea.AbsolutePosition.X + Canvas; -- in the canvas, screen px
+        local Right = Left + Tab.Button.AbsoluteSize.X;
+
+        if View <= 0 then
+            return; -- not laid out yet
+        elseif Left < Canvas then
+            Canvas = Left;
+        elseif Right > Canvas + View then
+            Canvas = Right - View;
+        end;
+
+        TabArea.CanvasPosition = Vector2.new(math.max(Canvas, 0), 0);
+    end;
 
     local TabContainer = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
@@ -6497,7 +6540,7 @@ function Library:CreateWindow(...)
         local TabButtonWidth = Library:GetTextBounds(Name, Library.Font, 16);
 
         -- VS Code style tab: a box with a divider on its right and the name dimmed while inactive. The active one takes
-        -- the content's shade, loses its bottom line and gets the accent line on top (Window:MoveUnderline).
+        -- the content's shade, loses its bottom line and gets the rounded outline (Window:MoveUnderline).
         local TabButton = Library:Create('Frame', {
             BackgroundTransparency = 1; -- the bar's shades are on the outline pieces (TabOutline), under the name
             BorderSizePixel = 0;
@@ -6659,6 +6702,7 @@ function Library:CreateWindow(...)
                 end;
             end;
 
+            Window:RevealTab(Tab); -- before it is the active one: the outline then slides to it from where the old tab now is
             Window.ActiveTab = Tab;
             TabActive = true;
             FadeTabLabel(0);
@@ -6760,6 +6804,14 @@ function Library:CreateWindow(...)
             Library:AddToRegistry(Highlight, {
                 BackgroundColor3 = 'AccentColor';
             });
+
+            -- On glass the box's own border does not show (Library:RegisterSection): its outline is these lines, as
+            -- around a tabbox. The accent line above is the top edge.
+            if Glass then
+                Line({ Size = UDim2.new(0, 1, 1, 0); ZIndex = 5; Parent = BoxInner });
+                Line({ AnchorPoint = Vector2.new(1, 0); Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, 1, 1, 0); ZIndex = 5; Parent = BoxInner });
+                Line({ AnchorPoint = Vector2.new(0, 1); Position = UDim2.new(0, 0, 1, 0); Size = UDim2.new(1, 0, 0, 1); ZIndex = 5; Parent = BoxInner });
+            end;
 
             local GroupboxLabel = Library:CreateLabel({
                 Size = UDim2.new(1, 0, 0, 18);
@@ -6884,8 +6936,8 @@ function Library:CreateWindow(...)
             });
 
             -- Header, as VS Code's editor tabs: the tab strip is the box's top 23 px. The active tab carries the box's
-            -- 2 px accent line (only as wide as that tab), is lifted a shade and is open at the bottom; a line under
-            -- the rest of the strip and one after every tab separate them. Then 3 px and the content.
+            -- 2 px accent line (only as wide as that tab), has the content's color and is open at the bottom; the rest
+            -- of the strip is shaded, with a line under it and one after every tab. Then 3 px and the content.
             local TabStripTop = 0;
             local TabStripHeight = 23;
             local DividerY = TabStripTop + TabStripHeight;
@@ -6954,20 +7006,22 @@ function Library:CreateWindow(...)
             local DividerLeft = Line({ Position = UDim2.fromOffset(0, DividerY); Size = UDim2.fromOffset(0, 1); ZIndex = 5; Parent = BoxInner });
             local DividerRight = Line({ Position = UDim2.fromOffset(0, DividerY); Size = UDim2.new(1, 0, 0, 1); ZIndex = 5; Parent = BoxInner });
 
-            -- The active tab's shade (a light lift of whatever the box shows, so it works on glass and in any theme)
-            -- and its accent line: one of each for the whole strip, sliding to the active tab. They live in BoxInner,
-            -- not the strip, which a UIListLayout arranges.
-            local TabboxFill = Library:Create('Frame', {
-                BackgroundColor3 = Library.FontColor;
-                BackgroundTransparency = 0.94;
-                BorderSizePixel = 0;
-                ZIndex = 5;
-                Parent = BoxInner;
-            });
+            -- The active tab has the color of the content under it, as in VS Code: it is the rest of the strip that is
+            -- shaded, a little darker than whatever the box shows (so it works on glass and in any theme). One piece
+            -- left and one right of the active tab, sliding with its accent line. They live in BoxInner, not the
+            -- strip, which a UIListLayout arranges. (A lighter fill on the active tab itself made it a different
+            -- color from its own content.)
+            local function StripShade()
+                return Library:Create('Frame', {
+                    BackgroundColor3 = Color3.new(0, 0, 0);
+                    BackgroundTransparency = 0.75;
+                    BorderSizePixel = 0;
+                    ZIndex = 4;
+                    Parent = BoxInner;
+                });
+            end;
 
-            Library:AddToRegistry(TabboxFill, {
-                BackgroundColor3 = 'FontColor';
-            });
+            local ShadeLeft, ShadeRight = StripShade(), StripShade();
 
             local TabboxUnderline = Library:Create('Frame', {
                 BackgroundColor3 = Library.AccentColor;
@@ -7010,7 +7064,7 @@ function Library:CreateWindow(...)
                 Tabbox:MoveUnderline(true); -- the box was resized: the tabs may fit now, or no longer
             end);
 
-            -- Puts the accent line, the shade and the gap in the bottom line on the active tab.
+            -- Puts the accent line and the gap in the bottom line on the active tab, and the shade either side of it.
             function Tabbox:MoveUnderline(Instant)
                 local Active = Tabbox.ActiveTab;
                 if not Active then
@@ -7023,7 +7077,8 @@ function Library:CreateWindow(...)
                 local Left, Width = Active.Left, Active.Width;
                 local Goals = {
                     [TabboxUnderline] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width, 2) };
-                    [TabboxFill] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width - 1, DividerY + 1) };
+                    [ShadeLeft] = { Size = UDim2.fromOffset(Left, DividerY) };
+                    [ShadeRight] = { Position = UDim2.fromOffset(Left + Width, 0); Size = UDim2.new(1, -(Left + Width), 0, DividerY) };
                     [DividerLeft] = { Size = UDim2.fromOffset(Left, 1) };
                     [DividerRight] = { Position = UDim2.fromOffset(Left + Width - 1, DividerY); Size = UDim2.new(1, -(Left + Width - 1), 0, 1) };
                 };
@@ -7274,7 +7329,6 @@ function Library:CreateWindow(...)
     local ActiveTweens = {};
     local Toggled = false;
     local ToggleGeneration = 0;
-    local FadeComplete = true;
     local CursorRunning = false;
 
     -- Frosted glass tint of a window built with GlassTransparency > 0 (0 = solid, blur off). Also patches the fade's
@@ -7300,16 +7354,69 @@ function Library:CreateWindow(...)
         Parent = Outer;
     });
 
+    -- shared lists: this runs once per faded instance on every open / close
+    local FADE_IMAGE = { 'ImageTransparency', 'BackgroundTransparency' };
+    local FADE_TEXT = { 'TextTransparency', 'BackgroundTransparency' };
+    local FADE_FRAME = { 'BackgroundTransparency' };
+    local FADE_STROKE = { 'Transparency' };
+
     local function GetFadeProperties(Desc)
         if Desc:IsA('ImageLabel') then
-            return { 'ImageTransparency', 'BackgroundTransparency' };
+            return FADE_IMAGE;
         elseif Desc:IsA('TextLabel') or Desc:IsA('TextBox') then
-            return { 'TextTransparency', 'BackgroundTransparency' };
+            return FADE_TEXT;
         elseif Desc:IsA('Frame') or Desc:IsA('ScrollingFrame') then
-            return { 'BackgroundTransparency' };
+            return FADE_FRAME;
         elseif Desc:IsA('UIStroke') then
-            return { 'Transparency' };
+            return FADE_STROKE;
         end;
+    end;
+
+    -- The open / close fade eases each instance's own transparency (see Library:FadeTree for why), and doing that
+    -- for the whole window froze the game: 7199 descendants in the Anime Adventures menu, 74 ms inside Toggle and a
+    -- 125 ms frame on every open and close (live, 2026-11-21). Only what is on screen is faded: FadedShown collects
+    -- the visible tree, leaving out the other tabs, folded content and rows scrolled out of a clipping frame.
+    -- Everything else keeps its real transparencies throughout; nobody sees it.
+    -- Faded: the instances a fade has touched and that may not be back at their real values yet.
+    local Faded = {};
+    local CULL_MARGIN = 40; -- px around a clipping frame still counted as on screen (glows spill past their frames)
+
+    local function FadedShown()
+        local Shown, InShown = { Outer }, { [Outer] = true };
+
+        -- X0..Y1: the window of the clipping frames Node sits in (nil = none)
+        local function Collect(Node, X0, Y0, X1, Y1)
+            for _, Child in next, Node:GetChildren() do
+                if Child:IsA('GuiObject') then
+                    if Child.Visible then
+                        local Pos, Size = Child.AbsolutePosition, Child.AbsoluteSize;
+                        local AX, AY = Pos.X, Pos.Y;
+                        local BX, BY = AX + Size.X, AY + Size.Y;
+
+                        if not X0 or (BX >= X0 - CULL_MARGIN and AX <= X1 + CULL_MARGIN
+                            and BY >= Y0 - CULL_MARGIN and AY <= Y1 + CULL_MARGIN) then
+
+                            Shown[#Shown + 1] = Child;
+                            InShown[Child] = true;
+
+                            if Child.ClipsDescendants then
+                                Collect(Child,
+                                    X0 and math.max(X0, AX) or AX, Y0 and math.max(Y0, AY) or AY,
+                                    X1 and math.min(X1, BX) or BX, Y1 and math.min(Y1, BY) or BY);
+                            else
+                                Collect(Child, X0, Y0, X1, Y1);
+                            end;
+                        end;
+                    end;
+                elseif Child:IsA('UIStroke') then
+                    Shown[#Shown + 1] = Child;
+                    InShown[Child] = true;
+                end;
+            end;
+        end;
+
+        Collect(Outer);
+        return Shown, InShown;
     end;
 
     local function RunCursor()
@@ -7433,10 +7540,6 @@ function Library:CreateWindow(...)
             Tab:EndSlide();
         end;
 
-        -- Hiding from a fully shown menu: re-read every element's current transparency so values that
-        -- changed while it was open (e.g. the tab underline) are what gets restored on the next show.
-        local RefreshCache = (not Toggled) and FadeComplete and Outer.Visible;
-        FadeComplete = false;
         Window.Fading = true; -- tabs switch without their slide meanwhile (Tab:ShowTab)
 
         if Toggled then
@@ -7457,10 +7560,21 @@ function Library:CreateWindow(...)
 
         Play(WindowScale, { Scale = (Toggled and 1 or 0.95) * Library.UIScale });
 
-        local Targets = Outer:GetDescendants();
-        table.insert(Targets, Outer);
+        local Shown, InShown = FadedShown();
 
-        for _, Desc in next, Targets do
+        -- left faded by an earlier toggle and off screen since (its tab was switched away while the menu was hidden):
+        -- straight back to its real values
+        for Desc in next, Faded do
+            if not InShown[Desc] then
+                Faded[Desc] = nil;
+
+                for Prop, Value in next, TransparencyCache[Desc] do
+                    Desc[Prop] = Value;
+                end;
+            end;
+        end;
+
+        for _, Desc in next, Shown do
             local Properties = GetFadeProperties(Desc);
 
             if not Properties then
@@ -7474,25 +7588,30 @@ function Library:CreateWindow(...)
                 TransparencyCache[Desc] = Cache;
             end;
 
-            local Goal = {};
+            -- not touched since the last finished fade-in: what it shows now is its real value (it may have changed
+            -- while the menu was open: a toggle's dimmed label, the active tab's name)
+            local Real = not Faded[Desc];
+            local Goal;
 
             for _, Prop in next, Properties do
-                if Cache[Prop] == nil or RefreshCache then
+                if Real then
                     Cache[Prop] = Desc[Prop];
                 end;
 
-                if Cache[Prop] == 1 then
-                    continue;
-                end;
+                local Value = Cache[Prop];
 
-                if Toggled and FromHidden then
-                    Desc[Prop] = 1;
-                end;
+                if Value ~= 1 then
+                    if Toggled and FromHidden then
+                        Desc[Prop] = 1;
+                    end;
 
-                Goal[Prop] = Toggled and Cache[Prop] or 1;
+                    Goal = Goal or {};
+                    Goal[Prop] = Toggled and Value or 1;
+                end;
             end;
 
-            if next(Goal) then
+            if Goal then
+                Faded[Desc] = true;
                 Play(Desc, Goal);
             end;
         end;
@@ -7503,8 +7622,11 @@ function Library:CreateWindow(...)
             end;
 
             Outer.Visible = Toggled;
-            FadeComplete = true;
             Window.Fading = false;
+
+            if Toggled then
+                table.clear(Faded); -- faded in: everything shows its real values again
+            end;
         end);
     end
 
@@ -7671,18 +7793,21 @@ local ThemeManager = {} do
 		writefile(self.Folder .. '/themes/default.txt', theme)
 	end
 
-	function ThemeManager:CreateThemeManager(groupbox)
-		groupbox:AddLabel('Background color'):AddColorPicker('BackgroundColor', { Default = self.Library.BackgroundColor });
-		groupbox:AddLabel('Main color')	:AddColorPicker('MainColor', { Default = self.Library.MainColor });
-		groupbox:AddLabel('Accent color'):AddColorPicker('AccentColor', { Default = self.Library.AccentColor });
-		groupbox:AddLabel('Outline color'):AddColorPicker('OutlineColor', { Default = self.Library.OutlineColor });
-		groupbox:AddLabel('Font color')	:AddColorPicker('FontColor', { Default = self.Library.FontColor });
+	-- colorsBox / customBox (optional): put the color pickers and the custom themes in boxes of their own
+	-- (ApplyToTab: tabs of one tabbox); all three default to groupbox.
+	function ThemeManager:CreateThemeManager(groupbox, colorsBox, customBox)
+		colorsBox, customBox = colorsBox or groupbox, customBox or groupbox
+		colorsBox:AddLabel('Background color'):AddColorPicker('BackgroundColor', { Default = self.Library.BackgroundColor });
+		colorsBox:AddLabel('Main color')	:AddColorPicker('MainColor', { Default = self.Library.MainColor });
+		colorsBox:AddLabel('Accent color'):AddColorPicker('AccentColor', { Default = self.Library.AccentColor });
+		colorsBox:AddLabel('Outline color'):AddColorPicker('OutlineColor', { Default = self.Library.OutlineColor });
+		colorsBox:AddLabel('Font color')	:AddColorPicker('FontColor', { Default = self.Library.FontColor });
 
 		-- built-in accent animation; a client that made its own toggles (kenya_client) keeps them
 		if not Toggles.RainbowAccent and not Toggles.GradientAccent then
-			groupbox:AddDivider()
-			groupbox:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = false })
-			groupbox:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = false, Tooltip = 'Spread the accent across the window instead of one flat color' })
+			colorsBox:AddDivider()
+			colorsBox:AddToggle('RainbowAccent', { Text = 'Animate accent', Default = false })
+			colorsBox:AddToggle('GradientAccent', { Text = 'Gradient accent', Default = false, Tooltip = 'Spread the accent across the window instead of one flat color' })
 			local function ApplyAccentMode()
 				self.Library:SetRainbowAccent(Toggles.RainbowAccent.Value, Toggles.GradientAccent.Value)
 			end
@@ -7697,7 +7822,7 @@ local ThemeManager = {} do
 
 		table.sort(ThemesArray, function(a, b) return self.BuiltInThemes[a][1] < self.BuiltInThemes[b][1] end)
 
-		groupbox:AddDivider()
+		if colorsBox == groupbox then groupbox:AddDivider() end
 		groupbox:AddDropdown('ThemeManager_ThemeList', { Text = 'Theme list', Values = ThemesArray, Default = 1 })
 
 		groupbox:AddButton('Set as default', function()
@@ -7709,12 +7834,12 @@ local ThemeManager = {} do
 			self:ApplyTheme(Options.ThemeManager_ThemeList.Value)
 		end)
 
-		groupbox:AddDivider()
-		groupbox:AddInput('ThemeManager_CustomThemeName', { Text = 'Custom theme name' })
-		groupbox:AddDropdown('ThemeManager_CustomThemeList', { Text = 'Custom themes', Values = self:ReloadCustomThemes(), AllowNull = true, Default = 1 })
-		groupbox:AddDivider()
+		if customBox == groupbox then groupbox:AddDivider() end
+		customBox:AddInput('ThemeManager_CustomThemeName', { Text = 'Custom theme name' })
+		customBox:AddDropdown('ThemeManager_CustomThemeList', { Text = 'Custom themes', Values = self:ReloadCustomThemes(), AllowNull = true, Default = 1 })
+		customBox:AddDivider()
 		
-		groupbox:AddButton('Save theme', function() 
+		customBox:AddButton('Save theme', function() 
 			self:SaveCustomTheme(Options.ThemeManager_CustomThemeName.Value)
 
 			Options.ThemeManager_CustomThemeList:SetValues(self:ReloadCustomThemes())
@@ -7723,12 +7848,12 @@ local ThemeManager = {} do
 			self:ApplyTheme(Options.ThemeManager_CustomThemeList.Value) 
 		end)
 
-		groupbox:AddButton('Refresh list', function()
+		customBox:AddButton('Refresh list', function()
 			Options.ThemeManager_CustomThemeList:SetValues(self:ReloadCustomThemes())
 			Options.ThemeManager_CustomThemeList:SetValue(nil)
 		end)
 
-		groupbox:AddButton('Set as default', function()
+		customBox:AddButton('Set as default', function()
 			if Options.ThemeManager_CustomThemeList.Value ~= nil and Options.ThemeManager_CustomThemeList.Value ~= '' then
 				self:SaveDefault(Options.ThemeManager_CustomThemeList.Value)
 				self.Library:Notify(string.format('Set default theme to %q', Options.ThemeManager_CustomThemeList.Value))
@@ -7841,10 +7966,11 @@ local ThemeManager = {} do
 		return tab:AddLeftGroupbox('Themes')
 	end
 
+	-- One 'Themes' tabbox: Theme (the list), Colors (the pickers, accent toggles), Custom (saved themes).
 	function ThemeManager:ApplyToTab(tab)
 		assert(self.Library, 'Must set ThemeManager.Library first!')
-		local groupbox = self:CreateGroupBox(tab)
-		self:CreateThemeManager(groupbox)
+		local Tabbox = tab:AddLeftTabbox('Themes')
+		self:CreateThemeManager(Tabbox:AddTab('Theme'), Tabbox:AddTab('Colors'), Tabbox:AddTab('Custom'))
 	end
 
 	function ThemeManager:ApplyToGroupbox(groupbox)
@@ -7856,7 +7982,9 @@ local ThemeManager = {} do
 	-- and Accent groupbox (animate, gradient, direction, custom colors). Call before ApplyToTab so the
 	-- built-in accent toggles there are skipped. Returns the Menu and Accent groupboxes.
 	function ThemeManager:BuildMenuSection(tab)
-		local MenuGroup = tab:AddLeftGroupbox('Menu')
+		-- one 'Menu' tabbox: General (behaviour, HUD, layout) and Look (cursor, glow)
+		local MenuTabs = tab:AddLeftTabbox('Menu')
+		local MenuGroup, LookGroup = MenuTabs:AddTab('General'), MenuTabs:AddTab('Look')
 
 		MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
 		MenuGroup:AddSlider('UIScale', { Text = 'UI scale', Default = 1, Min = 0.5, Max = 2, Rounding = 2, Suffix = 'x', HideMax = true, Tooltip = 'Size of the menu and its popups' })
@@ -7870,17 +7998,17 @@ local ThemeManager = {} do
 		end
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
-		MenuGroup:AddInput('CursorImage', { Text = 'Custom cursor', Placeholder = 'Image URL, file or rbxassetid', Finished = true, Tooltip = 'Image shown as the menu cursor. A URL is downloaded once (getcustomasset). Empty: default triangle' })
-		MenuGroup:AddSlider('CursorSize', { Text = 'Cursor size', Default = 24, Min = 8, Max = 64, Rounding = 0, Suffix = 'px', HideMax = true })
+		LookGroup:AddInput('CursorImage', { Text = 'Custom cursor', Placeholder = 'Image URL, file or rbxassetid', Finished = true, Tooltip = 'Image shown as the menu cursor. A URL is downloaded once (getcustomasset). Empty: default triangle' })
+		LookGroup:AddSlider('CursorSize', { Text = 'Cursor size', Default = 24, Min = 8, Max = 64, Rounding = 0, Suffix = 'px', HideMax = true })
 		Options.CursorImage:OnChanged(function(Value) Library:SetCursor(Value) end)
 		Options.CursorSize:OnChanged(function(Value) Library:SetCursor(nil, Value) end)
-		MenuGroup:AddToggle('WindowGlow', { Text = 'Window glow', Default = false, Tooltip = 'Soft accent-colored glow around the menu' })
-		local GlowBox = MenuGroup:AddDependencyBox()
+		LookGroup:AddToggle('WindowGlow', { Text = 'Window glow', Default = false, Tooltip = 'Soft accent-colored glow around the menu' })
+		local GlowBox = LookGroup:AddDependencyBox()
 		GlowBox:AddSlider('GlowSize', { Text = 'Glow size', Default = 30, Min = 5, Max = 100, Rounding = 0, Suffix = 'px', HideMax = true })
 		GlowBox:AddSlider('GlowStrength', { Text = 'Glow strength', Default = 50, Min = 5, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
 		GlowBox:SetupDependencies({ { Toggles.WindowGlow, true } })
-		MenuGroup:AddToggle('ElementGlow', { Text = 'Element glow', Default = false, Tooltip = 'Glow under switched-on toggles, slider fills and color swatches' })
-		local ElementGlowBox = MenuGroup:AddDependencyBox()
+		LookGroup:AddToggle('ElementGlow', { Text = 'Element glow', Default = false, Tooltip = 'Glow under switched-on toggles, slider fills and color swatches' })
+		local ElementGlowBox = LookGroup:AddDependencyBox()
 		ElementGlowBox:AddSlider('ElementGlowStrength', { Text = 'Element glow strength', Default = 45, Min = 5, Max = 100, Rounding = 0, Suffix = '%', HideMax = true })
 		ElementGlowBox:SetupDependencies({ { Toggles.ElementGlow, true } })
 		local function ApplyElementGlow()
