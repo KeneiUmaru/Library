@@ -29,6 +29,12 @@
         Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
         Library:Notify(text, seconds?)            -- accent bar along the bottom counts the duration down (default 5s),
                                                   -- then it fades out
+        Library:Modal({ Title, Text, Buttons = { 'Delete', 'Cancel' } }) -- dialog over the dimmed window; yields and
+                                                  -- returns the picked button's text. The first button is the accent
+                                                  -- one, on the right
+        Library:ChangeLog({ Title, Pages = { { Title, Text, Kind = 'new' | 'changed' | 'fixed', Path } } })
+                                                  -- what's new, one change per page (Back / Next); yields, true once
+                                                  -- read or skipped (save that yourself to show it only once)
         Library:RunOnUIThread(fn, ...)            -- run a menu update from a game callback (CoreGui needs executor identity);
                                                   -- SetText / SetValue / Notify / Toggle / SetWatermark already do this themselves
         Sections (every groupbox / tabbox)        -- -/+ folds it; drag its title to move it (accent box = where it
@@ -1393,6 +1399,7 @@ local LucideIcons = {
     ['minus'] = { lines = { { 5, 12, 19, 12 } } };
     ['plus'] = { lines = { { 5, 12, 19, 12 }, { 12, 5, 12, 19 } } };
     ['check'] = { lines = { { 20, 6, 9, 17 }, { 9, 17, 4, 12 } } };
+    ['arrow-right-left'] = { lines = { { 8, 3, 4, 7 }, { 4, 7, 8, 11 }, { 4, 7, 20, 7 }, { 16, 21, 20, 17 }, { 20, 17, 16, 13 }, { 20, 17, 4, 17 } } };
     ['pin'] = { lines = { { 8, 3, 16, 3 }, { 9, 3, 9, 10 }, { 15, 3, 15, 10 }, { 9, 10, 5, 15 }, { 15, 10, 19, 15 }, { 5, 15, 19, 15 }, { 12, 15, 12, 22 } } };
 };
 LucideIcons['pin-off'] = { lines = table.clone(LucideIcons.pin.lines) };
@@ -5199,6 +5206,437 @@ function Library:SetWatermark(Text)
     end;
 end;
 
+-- Shared by Library:Modal and Library:ChangeLog: a dialog of Width x Height over the dimmed menu window, which takes
+-- no input meanwhile. It hides and comes back with the menu.
+-- shortcut: covers the main window only, floating panels stay usable; a ScreenGui of its own when that matters.
+local DIALOG_FOOTER = IsMobile and 40 or 32;
+
+local function DialogBorderColor()
+    return Library.OutlineColor:Lerp(Library.FontColor, 0.3);
+end;
+
+local function OpenDialog(Width, Height)
+    local Window = assert(Library.MainWindow, 'Library dialog: no window yet');
+
+    -- an open dropdown list or color picker would stay over the dimmed window
+    for Frame in next, Library.OpenedFrames do
+        Frame.Visible = false;
+        Library.OpenedFrames[Frame] = nil;
+    end;
+
+    -- Only a button keeps a click from the controls under it (live test: an Active frame over a toggle did not), and
+    -- the menu's fade leaves buttons alone. So a clear button takes the input and a frame in it does the dimming.
+    -- The button starts under the title bar, so the window can still be dragged by it; the dim covers that too.
+    local Title = Library.WindowTitleHeight or 0;
+    local Blocker = Library:Create('TextButton', {
+        AutoButtonColor = false;
+        BackgroundTransparency = 1;
+        Position = UDim2.fromOffset(0, Title);
+        Size = UDim2.new(1, 0, 1, -Title);
+        Text = '';
+        ZIndex = 300;
+        Parent = Window;
+    });
+
+    Library:Create('Frame', {
+        BackgroundColor3 = Color3.new(0, 0, 0);
+        BackgroundTransparency = 0.5;
+        BorderSizePixel = 0;
+        Position = UDim2.fromOffset(0, -Title);
+        Size = UDim2.new(1, 0, 1, Title);
+        ZIndex = 300;
+        Parent = Blocker;
+    });
+
+    local Frame = Library:Create('Frame', {
+        AnchorPoint = Vector2.new(0.5, 0.5);
+        BackgroundColor3 = Library.MainColor;
+        BorderSizePixel = 0;
+        Position = UDim2.new(0.5, 0, 0.5, -Title / 2); -- centred on the whole window
+        Size = UDim2.fromOffset(Width, Height);
+        ZIndex = 302;
+        Parent = Blocker;
+    });
+
+    Library:AddToRegistry(Frame, { BackgroundColor3 = 'MainColor' });
+    Library:Create('UICorner', { CornerRadius = UDim.new(0, 6); Parent = Frame });
+
+    -- border and shadow as on the dropdown list
+    Library:AddToRegistry(Library:Create('UIStroke', {
+        Color = DialogBorderColor();
+        Thickness = 1;
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+        Parent = Frame;
+    }), { Color = DialogBorderColor });
+
+    local Shadow = Library:AddGlow(Frame, 14, 301);
+    Shadow.ImageColor3 = Color3.new(0, 0, 0);
+    Shadow.ImageTransparency = 0.3;
+    Shadow.Position = UDim2.new(0.5, 0, 0.5, 4);
+
+    -- pop in by scale: the transparencies belong to the menu's fade
+    local Pop = Library:Create('UIScale', { Scale = Library.Animations and 0.94 or 1; Parent = Frame });
+    Library:Animate(Pop, 0.12, { Scale = 1 });
+
+    local Dialog = { Frame = Frame };
+
+    function Dialog.Rule(Position, Size)
+        Library:AddToRegistry(Library:Create('Frame', {
+            BackgroundColor3 = DialogBorderColor();
+            BorderSizePixel = 0;
+            Position = Position;
+            Size = Size;
+            ZIndex = 304;
+            Parent = Frame;
+        }), { BackgroundColor3 = DialogBorderColor });
+    end;
+
+    -- The buttons split the foot of the dialog evenly; the first is the primary one: accent text, on the right.
+    -- OnPick(Index) runs on a tap. Returns the buttons' labels, for dialogs that rename them.
+    function Dialog.Footer(Names, OnPick)
+        local Labels = {};
+        Dialog.Rule(UDim2.new(0, 0, 1, -DIALOG_FOOTER - 1), UDim2.new(1, 0, 0, 1));
+
+        for Index, Name in next, Names do
+            local Slot = #Names - Index; -- from the right: the primary one ends up there
+
+            local Part = Library:Create('Frame', {
+                BackgroundTransparency = 1;
+                Position = UDim2.new(Slot / #Names, 0, 1, -DIALOG_FOOTER);
+                Size = UDim2.new(1 / #Names, 0, 0, DIALOG_FOOTER);
+                ZIndex = 303;
+                Parent = Frame;
+            });
+
+            if Slot > 0 then
+                Dialog.Rule(UDim2.new(Slot / #Names, 0, 1, -DIALOG_FOOTER), UDim2.new(0, 1, 0, DIALOG_FOOTER));
+            end;
+
+            -- Hover fill, inset so it stays clear of the dialog's round corners. By color and never by transparency:
+            -- the transparencies belong to the menu's fade.
+            local Pill = Library:Create('Frame', {
+                BackgroundColor3 = Library.MainColor;
+                BorderSizePixel = 0;
+                Position = UDim2.fromOffset(4, 4);
+                Size = UDim2.new(1, -8, 1, -8);
+                ZIndex = 303;
+                Parent = Part;
+            });
+
+            Library:AddToRegistry(Pill, { BackgroundColor3 = 'MainColor' });
+            Library:Create('UICorner', { CornerRadius = UDim.new(0, 4); Parent = Pill });
+
+            local Label = Library:CreateLabel({
+                Size = UDim2.fromScale(1, 1);
+                Text = Name;
+                TextSize = 14;
+                ZIndex = 305;
+                Parent = Part;
+            });
+
+            if Index == 1 then
+                Library:RemoveFromRegistry(Label);
+                Label.TextColor3 = Library.AccentColor;
+                Library:AddToRegistry(Label, { TextColor3 = 'AccentColor' });
+            end;
+
+            Labels[Index] = Label;
+
+            Part.MouseEnter:Connect(function()
+                Library:Animate(Pill, 0.1, { BackgroundColor3 = Library.MainColor:Lerp(Library.AccentColor, 0.3) });
+            end);
+
+            Part.MouseLeave:Connect(function()
+                Library:Animate(Pill, 0.15, { BackgroundColor3 = Library.MainColor });
+            end);
+
+            Part.InputBegan:Connect(function(Input)
+                if IsTap(Input) and Blocker.Parent then
+                    OnPick(Index);
+                end;
+            end);
+        end;
+
+        return Labels;
+    end;
+
+    function Dialog.Close()
+        -- the theme registry would keep the destroyed pieces otherwise
+        for _, Desc in next, Blocker:GetDescendants() do
+            Library:RemoveFromRegistry(Desc);
+        end;
+
+        Blocker:Destroy();
+    end;
+
+    -- yields until Close, or until the window itself goes away
+    function Dialog.Wait()
+        if not Blocker.Parent then return; end;
+        local Done = Instance.new('BindableEvent');
+        Blocker.Destroying:Connect(function() Done:Fire(); end);
+        Done.Event:Wait();
+        Done:Destroy();
+    end;
+
+    return Dialog;
+end;
+
+-- Modal dialog over the menu window, as VS Code's: the window dims and takes no input until a button is picked.
+-- Yields and returns the picked button's text (nil if the window is destroyed first). The first button is the
+-- primary one, on the right.
+--   if Library:Modal({ Title = 'Delete preset?', Text = 'This cannot be undone.', Buttons = { 'Delete', 'Cancel' } }) == 'Delete' then
+function Library:Modal(Info)
+    if Library:NeedsUIThread() then
+        return Library:RunOnUIThread(Library.Modal, Library, Info);
+    end;
+
+    local Names = Info.Buttons or { 'OK' };
+    local Text = Info.Text or '';
+    local WIDTH, PAD, TITLE_HEIGHT = 280, 14, 18;
+
+    local _, TextHeight = Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(WIDTH - PAD * 2, 1920));
+    local TextBlock = Text ~= '' and TextHeight + 8 or 0;
+    local Dialog = OpenDialog(WIDTH, PAD + TITLE_HEIGHT + TextBlock + PAD + 1 + DIALOG_FOOTER);
+
+    Library:CreateLabel({
+        Position = UDim2.fromOffset(PAD, PAD);
+        Size = UDim2.new(1, -PAD * 2, 0, TITLE_HEIGHT);
+        Text = Info.Title or '';
+        TextSize = 15;
+        TextTruncate = Enum.TextTruncate.AtEnd;
+        ZIndex = 303;
+        Parent = Dialog.Frame;
+    });
+
+    Library:CreateLabel({
+        Position = UDim2.fromOffset(PAD, PAD + TITLE_HEIGHT + 8);
+        Size = UDim2.new(1, -PAD * 2, 0, TextHeight);
+        Text = Text;
+        TextSize = 14;
+        TextTransparency = 0.25; -- under the title in weight
+        TextWrapped = true;
+        TextYAlignment = Enum.TextYAlignment.Top;
+        Visible = Text ~= '';
+        ZIndex = 303;
+        Parent = Dialog.Frame;
+    });
+
+    local Choice;
+    Dialog.Footer(Names, function(Index)
+        Choice = Names[Index];
+        Dialog.Close();
+    end);
+
+    Dialog.Wait();
+    return Choice;
+end;
+
+-- What's new, one change per page: a preview strip (kind tag, mark, menu path), the change's name and text, page
+-- dots, and Skip / Back | Next / Done. Yields; returns true once read through or skipped, nil if the window went
+-- away first. Showing it only once per version is the caller's: save the version when this returns true.
+--   Library:ChangeLog({ Title = "What's new", Pages = {
+--       { Title = 'Auto Position', Text = 'Picks the spot ...', Kind = 'changed', Path = 'Gameplay > Auto Play > Position' },
+--   } })
+local CHANGE_KINDS = { -- the colors of the Discord change log; Lucide icons, as the font's + ~ - came out tiny
+    new = { Tag = 'NEW', Icon = 'plus', Color = Color3.fromRGB(115, 201, 145) };
+    changed = { Tag = 'CHANGED', Icon = 'arrow-right-left', Color = Color3.fromRGB(226, 192, 141) };
+    fixed = { Tag = 'FIXED', Icon = 'check', Color = Color3.fromRGB(241, 76, 76) };
+};
+
+function Library:ChangeLog(Info)
+    if Library:NeedsUIThread() then
+        return Library:RunOnUIThread(Library.ChangeLog, Library, Info);
+    end;
+
+    local Pages = Info.Pages;
+    assert(type(Pages) == 'table' and #Pages > 0, 'Library:ChangeLog: no Pages');
+
+    local WIDTH, PAD, TITLE_HEIGHT, PREVIEW = 320, 14, 18, 70;
+    local TOP = PAD + TITLE_HEIGHT + 8;
+    local TEXT_TOP = PREVIEW + 10 + 18 + 6; -- under the preview and the page's name
+
+    -- one size for every page, the tallest text's, so the buttons stay put while paging
+    local TextHeight = 0;
+    for _, Page in next, Pages do
+        local _, Height = Library:GetTextBounds(Page.Text or '', Library.Font, 14, Vector2.new(WIDTH - PAD * 2, 1920));
+        TextHeight = math.max(TextHeight, Height);
+    end;
+
+    local DotsTop = TOP + TEXT_TOP + TextHeight + 16;
+    local Dialog = OpenDialog(WIDTH, DotsTop + 6 + 12 + 1 + DIALOG_FOOTER);
+    local Frame = Dialog.Frame;
+
+    Library:CreateLabel({
+        Position = UDim2.fromOffset(PAD, PAD);
+        Size = UDim2.new(1, -PAD * 2 - 50, 0, TITLE_HEIGHT);
+        Text = Info.Title or "What's new";
+        TextSize = 15;
+        TextTruncate = Enum.TextTruncate.AtEnd;
+        TextXAlignment = Enum.TextXAlignment.Left;
+        ZIndex = 303;
+        Parent = Frame;
+    });
+
+    local Counter = Library:CreateLabel({
+        AnchorPoint = Vector2.new(1, 0);
+        Position = UDim2.new(1, -PAD, 0, PAD);
+        Size = UDim2.fromOffset(50, TITLE_HEIGHT);
+        TextSize = 13;
+        TextTransparency = 0.5;
+        TextXAlignment = Enum.TextXAlignment.Right;
+        ZIndex = 303;
+        Parent = Frame;
+    });
+
+    -- the page's own content, slid in on a page change
+    local Content = Library:Create('Frame', {
+        BackgroundTransparency = 1;
+        Position = UDim2.fromOffset(0, TOP);
+        Size = UDim2.new(1, 0, 0, TEXT_TOP + TextHeight);
+        ZIndex = 303;
+        Parent = Frame;
+    });
+
+    local Preview = Library:Create('Frame', {
+        BackgroundColor3 = Library.BackgroundColor;
+        BorderSizePixel = 0;
+        Position = UDim2.fromOffset(12, 0);
+        Size = UDim2.new(1, -24, 0, PREVIEW);
+        ZIndex = 303;
+        Parent = Content;
+    });
+
+    Library:AddToRegistry(Preview, { BackgroundColor3 = 'BackgroundColor' });
+    Library:Create('UICorner', { CornerRadius = UDim.new(0, 4); Parent = Preview });
+    Library:AddToRegistry(Library:Create('UIStroke', {
+        Color = DialogBorderColor();
+        Thickness = 1;
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+        Parent = Preview;
+    }), { Color = DialogBorderColor });
+
+    local Tag = Library:Create('Frame', {
+        BackgroundTransparency = 0.8;
+        BorderSizePixel = 0;
+        Position = UDim2.fromOffset(8, 8);
+        ZIndex = 304;
+        Parent = Preview;
+    });
+
+    Library:Create('UICorner', { CornerRadius = UDim.new(0, 3); Parent = Tag });
+    local TagStroke = Library:Create('UIStroke', { Thickness = 1; ApplyStrokeMode = Enum.ApplyStrokeMode.Border; Parent = Tag });
+    local TagLabel = Library:CreateLabel({ Size = UDim2.fromScale(1, 1); TextSize = 11; ZIndex = 305; Parent = Tag });
+
+    local Icons = {};
+    for Key, Kind in next, CHANGE_KINDS do
+        Icons[Key] = Library:CreateIcon(Kind.Icon, {
+            AnchorPoint = Vector2.new(0.5, 0.5);
+            Color = function() return Kind.Color; end;
+            Size = 24;
+            Thickness = 2;
+            ZIndex = 304;
+            Parent = Preview;
+        });
+    end;
+
+    local Path = Library:CreateLabel({
+        Position = UDim2.fromOffset(8, 46);
+        Size = UDim2.new(1, -16, 0, 16);
+        TextSize = 13;
+        TextTransparency = 0.35;
+        TextTruncate = Enum.TextTruncate.AtEnd;
+        ZIndex = 304;
+        Parent = Preview;
+    });
+
+    local Name = Library:CreateLabel({
+        Position = UDim2.fromOffset(PAD, PREVIEW + 10);
+        Size = UDim2.new(1, -PAD * 2, 0, 18);
+        TextSize = 15;
+        TextTruncate = Enum.TextTruncate.AtEnd;
+        ZIndex = 303;
+        Parent = Content;
+    });
+
+    local Body = Library:CreateLabel({
+        Position = UDim2.fromOffset(PAD, TEXT_TOP);
+        Size = UDim2.new(1, -PAD * 2, 0, TextHeight);
+        TextSize = 14;
+        TextTransparency = 0.25;
+        TextWrapped = true;
+        TextYAlignment = Enum.TextYAlignment.Top;
+        ZIndex = 303;
+        Parent = Content;
+    });
+
+    local Dots = {};
+    local DotsLeft = (WIDTH - (#Pages * 12 - 6)) / 2;
+    for Index = 1, #Pages do
+        Dots[Index] = Library:Create('Frame', {
+            BorderSizePixel = 0;
+            Position = UDim2.fromOffset(DotsLeft + (Index - 1) * 12, DotsTop);
+            Size = UDim2.fromOffset(6, 6);
+            ZIndex = 303;
+            Parent = Frame;
+        });
+        Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = Dots[Index] });
+    end;
+
+    local Current, Finished = 1, false;
+    local Labels;
+
+    -- Colors and texts only: the transparencies belong to the menu's fade, which caches them while it is hidden.
+    local function Show(Index, Direction)
+        Current = Index;
+        local Page = Pages[Index];
+        local KindKey = CHANGE_KINDS[Page.Kind] and Page.Kind or 'new';
+        local Kind = CHANGE_KINDS[KindKey];
+
+        Counter.Text = Index .. ' / ' .. #Pages;
+        TagLabel.Text = Kind.Tag;
+        TagLabel.TextColor3 = Kind.Color;
+        Tag.BackgroundColor3 = Kind.Color;
+        TagStroke.Color = Kind.Color;
+        Tag.Size = UDim2.fromOffset(Library:GetTextBounds(Kind.Tag, Library.Font, 11) + 12, 16);
+        for Key, Icon in next, Icons do
+            Icon.Visible = Key == KindKey;
+            Icon.Position = UDim2.new(0.5, 0, 0, Page.Path and 28 or PREVIEW / 2); -- centred when there is no path
+        end;
+        Path.Text = Page.Path or '';
+        Name.Text = Page.Title or '';
+        Body.Text = Page.Text or '';
+        -- a list (one item a line) reads down the left; a sentence stays centred
+        Body.TextXAlignment = Body.Text:find('\n') and Enum.TextXAlignment.Left or Enum.TextXAlignment.Center;
+
+        for Dot, Frame in next, Dots do
+            Frame.BackgroundColor3 = Dot == Index and Library.AccentColor or DialogBorderColor();
+        end;
+
+        Labels[1].Text = Index == #Pages and 'Done' or 'Next';
+        Labels[2].Text = Index == 1 and 'Skip' or 'Back';
+
+        if Direction and Library.Animations then
+            Content.Position = UDim2.fromOffset(Direction * 16, TOP);
+            Library:Animate(Content, 0.18, { Position = UDim2.fromOffset(0, TOP) });
+        end;
+    end;
+
+    Labels = Dialog.Footer({ 'Next', 'Skip' }, function(Button)
+        if Button == 1 and Current < #Pages then
+            Show(Current + 1, 1);
+        elseif Button == 2 and Current > 1 then
+            Show(Current - 1, -1);
+        else -- Done, or Skip on the first page
+            Finished = true;
+            Dialog.Close();
+        end;
+    end);
+
+    Show(1);
+    Dialog.Wait();
+    return Finished or nil;
+end;
+
 function Library:Notify(Text, Time)
     if Library:NeedsUIThread() then
         return Library:RunOnUIThread(Library.Notify, Library, Text, Time);
@@ -6102,6 +6540,7 @@ function Library:CreateWindow(...)
     });
 
     Library:MakeDraggable(Outer, TITLE_HEIGHT, true);
+    Library.WindowTitleHeight = TITLE_HEIGHT; -- dialogs leave the title bar draggable (OpenDialog)
 
     -- NieR-style resize grip: a triangle of 2px accent dots in the bottom-right corner, faint at rest and solid on
     -- hover / while dragging. Drag it (mouse or finger) to resize; the top-left corner stays put.
