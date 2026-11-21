@@ -5800,8 +5800,6 @@ function Library:CreateWindow(...)
         Parent = MainSectionInner;
     });
 
-    Line({ Size = UDim2.new(1, 0, 0, 1); ZIndex = 4; Parent = TabOutline });
-
     local function OutlinePiece(ClipProperties, BoxProperties)
         ClipProperties.BackgroundTransparency = 1;
         ClipProperties.ClipsDescendants = true;
@@ -5831,6 +5829,13 @@ function Library:CreateWindow(...)
         Position = UDim2.fromOffset(1, -TabReach);
         Size = UDim2.new(1, TabReach - 1, 0, TabLower - 1 + TabReach);
     });
+
+    -- The bar's own outline: the top line with rounded ends (the top half of a box as wide as the bar), then both
+    -- sides straight down into the content box's outline. The sides are plain lines: a box seen through a 1px wide
+    -- clip did not draw at all in the live menu.
+    OutlinePiece({ Size = UDim2.new(1, 0, 0, TabHalf) }, { Position = UDim2.fromOffset(1, 1); Size = UDim2.new(1, -2, 0, TAB_HEIGHT + TabReach) });
+    Line({ Position = UDim2.fromOffset(0, TabHalf); Size = UDim2.fromOffset(1, TabLower); ZIndex = 4; Parent = TabOutline });
+    Line({ Position = UDim2.new(1, -1, 0, TabHalf); Size = UDim2.fromOffset(1, TabLower); ZIndex = 4; Parent = TabOutline });
 
     -- Solid menu: the content box's top border runs along the bar's bottom row; this hides it under the active tab.
     local TabGap = not Glass and Library:Create('Frame', {
@@ -5866,9 +5871,7 @@ function Library:CreateWindow(...)
             [ActiveClip] = { Position = UDim2.fromOffset(Left, 0); Size = UDim2.fromOffset(Width + 1, TabHalf) };
             [ActiveBox] = { Size = UDim2.fromOffset(Width - 1, TAB_HEIGHT + TabReach) };
             [LeftClip] = { Size = UDim2.fromOffset(Left + 1, TabLower) };
-            -- first tab active: there is no bar left of it, so the box also runs past the bottom and its side goes
-            -- straight down into the content box's outline
-            [LeftBox] = { Size = UDim2.fromOffset(Left + TabReach, TabLower - 1 + TabReach + (Left == 0 and TabReach or 0)) };
+            [LeftBox] = { Size = UDim2.fromOffset(Left + TabReach, TabLower - 1 + TabReach) };
             [RightClip] = { Position = UDim2.fromOffset(Left + Width, TabHalf); Size = UDim2.new(1, -(Left + Width), 0, TabLower) };
         };
 
