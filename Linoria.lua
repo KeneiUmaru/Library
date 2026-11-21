@@ -996,10 +996,40 @@ end
 local GlassFrames = {};
 local GLASS_DEPTH = 1;
 
+-- A game can destroy either one at any time (a map load clears Lighting, a respawn replaces the camera), and a
+-- destroyed instance cannot be parented again: UpdateGlass then makes a fresh one.
+local function NewBlur(NearIntensity)
+    local Blur = Instance.new('DepthOfFieldEffect');
+    Blur.Name = 'LinoriaBlur';
+    Blur.FarIntensity = 0;
+    Blur.FocusDistance = 51.6;
+    Blur.InFocusRadius = 50;
+    Blur.NearIntensity = NearIntensity;
+    Blur.Parent = game:GetService('Lighting');
+    Library.Blur = Blur;
+    return Blur;
+end;
+
+local function NewGlassPart()
+    local Part = Instance.new('Part');
+    Part.Anchored = true;
+    Part.CanCollide = false;
+    Part.CanQuery = false;
+    Part.CanTouch = false;
+    Part.CastShadow = false;
+    Part.Material = Enum.Material.Glass;
+    Part.Transparency = 0.98;
+    return Part;
+end;
+
 local function UpdateGlass(Delta)
     local Camera = workspace.CurrentCamera;
     local Blur = Library.Blur;
     local Wanted = false;
+
+    if not Blur.Parent then
+        Blur = NewBlur(Blur.NearIntensity);
+    end;
 
     for Frame, Glass in next, GlassFrames do
         if not Frame.Parent then -- destroyed with its window / panel
@@ -1009,8 +1039,15 @@ local function UpdateGlass(Delta)
         end;
 
         local Visible, Want = Glass.Shown();
+        if Library.GlassTransparency <= 0 then -- solid menu (Library:SetGlassTransparency): nothing shows through
+            Visible, Want = false, false;
+        end;
         Wanted = Wanted or Want;
-        Glass.Part.Parent = Visible and Camera or nil;
+        local Parent = Visible and Camera or nil;
+        if Glass.Part.Parent ~= Parent and not pcall(function() Glass.Part.Parent = Parent; end) then
+            Glass.Part = NewGlassPart(); -- the old one went with a destroyed camera
+            Glass.Part.Parent = Parent;
+        end;
 
         if Visible and Camera then
             local Size = Frame.AbsoluteSize;
@@ -1028,30 +1065,14 @@ end;
 
 function Library:AddGlass(Frame, Shown)
     if not Library.Blur then
-        local Blur = Instance.new('DepthOfFieldEffect');
-        Blur.Name = 'LinoriaBlur';
-        Blur.FarIntensity = 0;
-        Blur.FocusDistance = 51.6;
-        Blur.InFocusRadius = 50;
-        Blur.NearIntensity = 0;
-        Blur.Parent = game:GetService('Lighting');
-        Library.Blur = Blur;
+        NewBlur(0);
 
         -- after the camera scripts, so the parts never trail the camera by a frame
         Library.GlassBinding = 'LinoriaGlass_' .. game:GetService('HttpService'):GenerateGUID(false);
         RunService:BindToRenderStep(Library.GlassBinding, Enum.RenderPriority.Last.Value, UpdateGlass);
     end;
 
-    local Part = Instance.new('Part');
-    Part.Anchored = true;
-    Part.CanCollide = false;
-    Part.CanQuery = false;
-    Part.CanTouch = false;
-    Part.CastShadow = false;
-    Part.Material = Enum.Material.Glass;
-    Part.Transparency = 0.98;
-
-    GlassFrames[Frame] = { Part = Part, Shown = Shown };
+    GlassFrames[Frame] = { Part = NewGlassPart(), Shown = Shown };
 end;
 
 function Library:Unload()
@@ -5352,7 +5373,7 @@ function Library:RegisterSection(Info)
     };
 
     -- Frosted glass: a floating panel has no window behind it, so it carries its own blur
-    if Library.GlassTransparency > 0 then
+    if Library.GlassTransparency > 0 or Library.Blur then -- Blur: a glass window whose opacity is set to solid
         Section.Inner = Info.Inner; -- tinted by Library:UpdateSectionButtons
         Info.Outer.BackgroundTransparency = 1;
         Info.Inner.BackgroundTransparency = 0.75;
@@ -6578,6 +6599,23 @@ function Library:CreateWindow(...)
     local FadeComplete = true;
     local CursorRunning = false;
 
+    -- Frosted glass tint of a window built with GlassTransparency > 0 (0 = solid, blur off). Also patches the fade's
+    -- cached value, which is what the next show restores.
+    function Library:SetGlassTransparency(Value)
+        Library.GlassTransparency = Value;
+        Inner.BackgroundTransparency = Value;
+
+        if TransparencyCache[Inner] then
+            TransparencyCache[Inner].BackgroundTransparency = Value;
+        end;
+
+        for _, Section in next, Library.Sections do
+            if Section.Inner and Section.Floating then
+                Section.Inner.BackgroundTransparency = Value;
+            end;
+        end;
+    end;
+
     -- Scales the whole window slightly while it fades, which reads a lot smoother than a flat alpha fade.
     local WindowScale = Library:Create('UIScale', {
         Scale = Library.UIScale;
@@ -7140,6 +7178,10 @@ local ThemeManager = {} do
 		MenuGroup:AddToggle('UIAnimations', { Text = 'Animations', Default = true, Tooltip = 'Eased fades, slides and hovers. Off: everything changes instantly', Callback = function(Value) Library.Animations = Value end })
 		MenuGroup:AddToggle('LightDrag', { Text = 'Light drag', Default = true, Tooltip = 'Drag the menu as an outline and move it on release: no FPS drop while dragging. Off: the menu follows the cursor', Callback = function(Value) Library.LightDrag = Value end })
 		MenuGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
+		if Library.Blur then -- frosted glass windows only: a script that set GlassTransparency = 0 keeps its solid menu
+			MenuGroup:AddSlider('MenuOpacity', { Text = 'Menu opacity', Default = math.floor((1 - Library.GlassTransparency) * 100 + 0.5), Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true, Tooltip = 'How solid the menu background is. Lower shows more of the blurred game behind it; 100% is solid and turns the blur off' })
+			Options.MenuOpacity:OnChanged(function(Value) Library:SetGlassTransparency(1 - Value / 100) end)
+		end
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
 		MenuGroup:AddInput('CursorImage', { Text = 'Custom cursor', Placeholder = 'Image URL, file or rbxassetid', Finished = true, Tooltip = 'Image shown as the menu cursor. A URL is downloaded once (getcustomasset). Empty: default triangle' })
