@@ -29,6 +29,9 @@
         Dropdown search box                       -- on lists longer than 8 values; Searchable = true / false forces it
         Library:Notify(text, seconds?)            -- accent bar along the bottom counts the duration down (default 5s),
                                                   -- then it fades out
+        CreateWindow Version / Channel / Subtitle / TitleNote -- title bar as a header: Title on the left with Version
+                                                  -- (accent) and Channel (green, e.g. 'BETA') as badges, Subtitle
+                                                  -- centred, TitleNote (an invite, a status) on the right
         Library:Modal({ Title, Text, Buttons = { 'Delete', 'Cancel' } }) -- dialog over the dimmed window; yields and
                                                   -- returns the picked button's text. The first button is the accent
                                                   -- one, on the right
@@ -42,7 +45,9 @@
                                                   -- keeps it shown while the menu is hidden. Library:GetLayout(),
                                                   -- :ApplyLayout(t), :SaveLayout(), :LoadLayout(), :ResetLayout();
                                                   -- saved to Library.LayoutFile (SaveManager:SetFolder sets it,
-                                                  -- SaveManager:LoadAutoloadConfig loads it)
+                                                  -- SaveManager:LoadAutoloadConfig loads it); it also keeps whether the
+                                                  -- menu was open: LoadLayout reopens or hides it that way
+                                                  -- (Library.SavedOpen = that value, nil for an older file)
         Library.Animations = true                 -- eased toggles, sliders, hovers, dropdowns, tab switch, folding, button
                                                   -- flash, notifications and the menu fade; false snaps them (Settings >
                                                   -- Menu > Animations). Library:Animate(inst, time, goal) / :CreateTween
@@ -196,7 +201,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 16;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 18;         -- bump when the public API changes; clients check this against the GitHub copy
                           -- 14: AddSlider Info.Format(Value) -> display text
                           -- 15: AddDropdown Info.ValueIcons
                           -- 16: Groupbox:AddIconLabel
@@ -208,6 +213,7 @@ local Library = {
     GlassTransparency = 0.1;  -- frosted glass: how see-through the window / sections are, with the game blurred
                           -- behind them only (0 = off, solid window). Set before CreateWindow.
     BlurBillboards = true;    -- also blur the game's name tags / damage numbers behind a glass frame
+    BlurStrength = 1;         -- 0..1: how strongly the game behind a glass frame is blurred (1 = the effect's most)
     Animations = true;    -- eased UI changes (see Library:CreateTween); false makes everything snap
     LightDrag = true;     -- drag the main window as an outline, move it on release (see Library:MakeDraggable)
 
@@ -613,6 +619,52 @@ function Library:CreateLabel(Properties, IsHud)
     return Library:Create(_Instance, Properties);
 end;
 
+-- Product of the UIScales above a frame: screen pixels per one unit of its Position offset.
+local function ParentScaleOf(Frame)
+    local Scale, Parent = 1, Frame.Parent;
+    while Parent and Parent:IsA('GuiObject') do
+        local UIScale = Parent:FindFirstChildOfClass('UIScale');
+        if UIScale then Scale = Scale * UIScale.Scale; end;
+        Parent = Parent.Parent;
+    end;
+    return math.max(Scale, 0.001);
+end;
+
+-- Frames the user places by hand (window, watermark, keybind list, floating sections). When the game window
+-- shrinks they are pulled back inside it; the top-left corner wins when a frame is larger than the screen. Each
+-- remembers where it was put (Home) and goes back there as the screen grows, until something else moves it.
+local Kept = {}; -- Frame -> { Home = position before it was pulled in, Set = position it was pulled to }
+
+function Library:KeepOnScreen(Frame)
+    local Entry = Kept[Frame] or {};
+    Kept[Frame] = Entry;
+    if Entry.Set ~= Frame.Position then Entry.Home = nil; end; -- dragged or reset since: that is the new home
+
+    local Home, Scale = Entry.Home or Frame.Position, ParentScaleOf(Frame);
+    local Back = Home - Frame.Position; -- only offsets differ (pulling in adds offsets)
+    local View, Size = ScreenGui.AbsoluteSize, Frame.AbsoluteSize;
+    local Pos = Frame.AbsolutePosition + Vector2.new(Back.X.Offset, Back.Y.Offset) * Scale; -- where Home sits now
+    -- floor: positions land on whole pixels, so a fractional size (UI scale 1.25) would poke out by under a pixel
+    local X = math.clamp(Pos.X, 0, math.max(math.floor(View.X - Size.X), 0)) - Pos.X;
+    local Y = math.clamp(Pos.Y, 0, math.max(math.floor(View.Y - Size.Y), 0)) - Pos.Y;
+
+    if X == 0 and Y == 0 then
+        Frame.Position = Home;
+        Entry.Home, Entry.Set = nil, nil;
+        return;
+    end;
+    Frame.Position = Home + UDim2.fromOffset(X / Scale, Y / Scale);
+    Entry.Home, Entry.Set = Home, Frame.Position;
+end;
+
+ScreenGui:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+    task.defer(function() -- frames are laid out against the new size after this signal
+        for Frame in next, Kept do
+            if Frame.Parent then Library:KeepOnScreen(Frame); else Kept[Frame] = nil; end;
+        end;
+    end);
+end);
+
 -- Ghostable: with Library.LightDrag on, an accent outline follows the cursor and the frame moves once on release.
 -- Moving the main window drags its whole tree (hidden tab pages included) through layout every frame; measured
 -- ~1.2-1.9 ms a frame on a fast PC, while the outline costs nothing.
@@ -622,16 +674,7 @@ function Library:MakeDraggable(Instance, Cutoff, Ghostable)
     local Dragging, Moved = false, false;
     local StartMouse, StartPosition, ParentScale;
     local Ghost, Light = nil, false;
-
-    local function GetParentScale()
-        local Scale, Parent = 1, Instance.Parent;
-        while Parent and Parent:IsA('GuiObject') do
-            local UIScale = Parent:FindFirstChildOfClass('UIScale');
-            if UIScale then Scale = Scale * UIScale.Scale; end;
-            Parent = Parent.Parent;
-        end;
-        return math.max(Scale, 0.001);
-    end;
+    Kept[Instance] = {};
 
     -- PlayerMouse stops updating while the Roblox ESC menu is open; GetMouseLocation does not (only deltas are used).
     local function Cursor()
@@ -706,7 +749,7 @@ function Library:MakeDraggable(Instance, Cutoff, Ghostable)
         if not IsClick(Input) or Dragging then return; end;
         local Pos, Abs, Size = Input.Position, Instance.AbsolutePosition, Instance.AbsoluteSize;
         if HitTest and (not Shown() or Pos.X < Abs.X or Pos.X > Abs.X + Size.X) then return; end;
-        ParentScale = GetParentScale();
+        ParentScale = ParentScaleOf(Instance);
         local OwnScale = Instance:FindFirstChildOfClass('UIScale');
         local HeaderScale = ParentScale * (OwnScale and OwnScale.Scale or 1);
         local HeaderY = Pos.Y - Abs.Y;
@@ -1280,7 +1323,10 @@ local function UpdateGlass(Delta)
         end;
     end;
 
-    Blur.NearIntensity = math.clamp(Blur.NearIntensity + (Wanted and Delta or -Delta) / 0.2, 0, 1);
+    -- eases to Library.BlurStrength while a glass frame is shown, and back to 0 when none is
+    local Goal = Wanted and math.clamp(tonumber(Library.BlurStrength) or 1, 0, 1) or 0;
+    local Step = Delta / 0.2;
+    Blur.NearIntensity = Blur.NearIntensity + math.clamp(Goal - Blur.NearIntensity, -Step, Step);
     Blur.Enabled = Blur.NearIntensity > 0;
 
     if (Wanted and Library.BlurBillboards == true and Camera ~= nil) ~= BillboardsOn then
@@ -4358,11 +4404,25 @@ do
             Parent = ScreenGui;
         });
 
+        -- The opening tween (Dropdown:OpenDropdown) owns the list's size and position while it runs. Anything else
+        -- that sizes or places the list ends it first, at its goal, or the tween would carry on to stale values.
+        local OpenTween, OpenFull, OpenRest;
+        local function EndOpenTween()
+            if not OpenTween then return; end;
+            OpenTween:Cancel();
+            OpenTween = nil;
+            ListOuter.Size, ListOuter.Position = OpenFull, OpenRest;
+        end;
+
         local function RecalculateListPosition()
-            Library:PlacePopupNear(ListOuter, DropdownOuter, 4); -- a gap, so the list does not read as part of the box
+            EndOpenTween();
+            -- Over the box itself, as a native select menu: the list starts where the box does (or ends where it ends,
+            -- when it has to open upward near the bottom of the screen). A gap of minus the box's height does both.
+            Library:PlacePopupNear(ListOuter, DropdownOuter, -DropdownOuter.AbsoluteSize.Y);
         end;
 
         local function RecalculateListSize(YSize)
+            EndOpenTween();
             ListOuter.Size = UDim2.fromOffset(DropdownOuter.AbsoluteSize.X / (Library.UIScale or 1), YSize or (MAX_DROPDOWN_ITEMS * ROW_HEIGHT + LIST_PAD * 2))
         end;
 
@@ -4454,6 +4514,13 @@ do
                 PlaceListBacking();
             end;
         end);
+
+        -- the backing is sized in px: it follows the list while that unfolds
+        for _, Property in next, { 'AbsoluteSize', 'AbsolutePosition' } do
+            ListOuter:GetPropertyChangedSignal(Property):Connect(function()
+                if ListOuter.Visible then PlaceListBacking(); end;
+            end);
+        end;
 
         local Scrolling = Library:Create('ScrollingFrame', {
             BackgroundTransparency = 1;
@@ -4804,13 +4871,40 @@ do
             if SearchRow.Visible and not IsMobile then
                 SearchBox:CaptureFocus(); -- type straight away; phones only get the keyboard when they tap the box
             end;
-            -- the list's contents drop in a few px and the arrow turns (Library.Animations)
-            ListInner.Position = UDim2.fromOffset(0, Library.Animations and -6 or 0);
-            Library:Animate(ListInner, 0.12, { Position = UDim2.new() });
+            -- The list unfolds out of the box it covers: from the box's height to its own, easing out, the rows
+            -- showing as it grows. Opened upward (near the bottom of the screen) it grows up from the box's lower edge.
+            -- No fade: one property eased on one frame, which is what keeps it calm. (Library.Animations)
+            local Scale = math.max(Library.UIScale or 1, 0.01);
+            OpenFull, OpenRest = ListOuter.Size, ListOuter.Position;
+            local Start = math.min(DropdownOuter.AbsoluteSize.Y / Scale, OpenFull.Y.Offset);
+            local Upward = OpenRest.Y.Offset < DropdownOuter.AbsolutePosition.Y - 1;
+
+            ListOuter.Size = UDim2.fromOffset(OpenFull.X.Offset, Start);
+            if Upward then
+                ListOuter.Position = OpenRest + UDim2.fromOffset(0, (OpenFull.Y.Offset - Start) * Scale);
+            end;
+
+            local Tween = Library:CreateTween(ListOuter, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Size = OpenFull;
+                Position = OpenRest;
+            });
+
+            OpenTween = Tween;
+            Tween:Play();
+
+            if Tween.Completed then
+                Tween.Completed:Once(function()
+                    if OpenTween == Tween then OpenTween = nil; end;
+                end);
+            else -- animations off: already at its goal
+                OpenTween = nil;
+            end;
+
             Library:Animate(DropdownArrow, 0.15, { Rotation = 180 });
         end;
 
         function Dropdown:CloseDropdown()
+            EndOpenTween();
             ListOuter.Visible = false;
             Library.OpenedFrames[ListOuter] = nil;
             for _, Row in ipairs(Rows) do
@@ -5238,7 +5332,7 @@ local function OpenDialog(Width, Height)
         Parent = Window;
     });
 
-    Library:Create('Frame', {
+    local Dim = Library:Create('Frame', {
         BackgroundColor3 = Color3.new(0, 0, 0);
         BackgroundTransparency = 0.5;
         BorderSizePixel = 0;
@@ -5247,6 +5341,15 @@ local function OpenDialog(Width, Height)
         ZIndex = 300;
         Parent = Blocker;
     });
+
+    -- The dim fades in and out: the whole menu going dark, or bright again, in one frame was a flash.
+    -- shortcut: a menu closed within these 0.18 s caches the half-faded dim as its real value (that dialog then
+    -- stays lighter); tell the menu's fade about the goal first if that ever shows.
+    local Animated = Library.Animations and Window.Visible;
+    if Animated then
+        Dim.BackgroundTransparency = 1;
+        Library:Animate(Dim, 0.18, { BackgroundTransparency = 0.5 });
+    end;
 
     local Frame = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0.5, 0.5);
@@ -5275,10 +5378,13 @@ local function OpenDialog(Width, Height)
     Shadow.Position = UDim2.new(0.5, 0, 0.5, 4);
 
     -- pop in by scale: the transparencies belong to the menu's fade
-    local Pop = Library:Create('UIScale', { Scale = Library.Animations and 0.94 or 1; Parent = Frame });
-    Library:Animate(Pop, 0.12, { Scale = 1 });
+    local Pop = Library:Create('UIScale', { Scale = Animated and 0.97 or 1; Parent = Frame });
+    Library:Animate(Pop, 0.18, { Scale = 1 });
 
     local Dialog = { Frame = Frame };
+    local Closed = false;
+    local Done = Instance.new('BindableEvent'); -- Close, or the window itself going away
+    Blocker.Destroying:Connect(function() Done:Fire(); end);
 
     function Dialog.Rule(Position, Size)
         Library:AddToRegistry(Library:Create('Frame', {
@@ -5351,7 +5457,7 @@ local function OpenDialog(Width, Height)
             end);
 
             Part.InputBegan:Connect(function(Input)
-                if IsTap(Input) and Blocker.Parent then
+                if IsTap(Input) and not Closed then
                     OnPick(Index);
                 end;
             end);
@@ -5361,21 +5467,29 @@ local function OpenDialog(Width, Height)
     end;
 
     function Dialog.Close()
+        if Closed then return; end;
+        Closed = true;
+
         -- the theme registry would keep the destroyed pieces otherwise
         for _, Desc in next, Blocker:GetDescendants() do
             Library:RemoveFromRegistry(Desc);
         end;
 
-        Blocker:Destroy();
+        Done:Fire(); -- the caller goes on now; the dim only fades behind it
+
+        if Library.Animations and Window.Visible then
+            Frame.Visible = false;
+            Library:Animate(Dim, 0.12, { BackgroundTransparency = 1 });
+            task.delay(0.12, function() Blocker:Destroy(); end);
+        else
+            Blocker:Destroy();
+        end;
     end;
 
     -- yields until Close, or until the window itself goes away
     function Dialog.Wait()
-        if not Blocker.Parent then return; end;
-        local Done = Instance.new('BindableEvent');
-        Blocker.Destroying:Connect(function() Done:Fire(); end);
+        if Closed or not Blocker.Parent then return; end;
         Done.Event:Wait();
-        Done:Destroy();
     end;
 
     return Dialog;
@@ -5616,7 +5730,7 @@ function Library:ChangeLog(Info)
         Labels[2].Text = Index == 1 and 'Skip' or 'Back';
 
         if Direction and Library.Animations then
-            Content.Position = UDim2.fromOffset(Direction * 16, TOP);
+            Content.Position = UDim2.fromOffset(Direction * 10, TOP);
             Library:Animate(Content, 0.18, { Position = UDim2.fromOffset(0, TOP) });
         end;
     end;
@@ -5861,6 +5975,7 @@ local function SectionHolder(Section)
         });
 
         Library:RegisterPopup(Section.Holder);
+        Kept[Section.Holder] = {};
 
         Section.Holder.InputBegan:Connect(function(Input)
             if IsClick(Input) then
@@ -6045,6 +6160,7 @@ function Library:GetLayout()
         Data[Section.Key] = Entry;
     end;
 
+    Data['@Menu'] = { Open = Library.Toggled };
     return Data;
 end;
 
@@ -6068,6 +6184,14 @@ function Library:ApplyLayout(Data)
             Library:SetSectionFolded(Section, Entry.Folded == true, true);
         end;
     end;
+
+    -- the menu opens or stays hidden the way it was left (nil when the file predates this)
+    local Menu = Data['@Menu'];
+    Library.SavedOpen = nil;
+    if type(Menu) == 'table' and type(Menu.Open) == 'boolean' then Library.SavedOpen = Menu.Open; end;
+    if Library.SavedOpen ~= nil and Library.SavedOpen ~= Library.Toggled then
+        Library:Toggle(Library.SavedOpen);
+    end;
 end;
 
 function Library:SaveLayout()
@@ -6081,7 +6205,9 @@ function Library:SaveLayout()
 end;
 
 function Library:LoadLayout()
-    if not (Library.LayoutFile and isfile and isfile(Library.LayoutFile)) then
+    if not Library.LayoutFile then return; end;
+    Library.LayoutLoaded = true; -- from now on Toggle saves the open state (earlier it would overwrite the saved layout)
+    if not (isfile and isfile(Library.LayoutFile)) then
         return;
     end;
 
@@ -6382,16 +6508,65 @@ local function TreeFadeProperties(Instance)
     end;
 end;
 
+-- What is on screen of a tree: Root and its visible descendants, leaving out hidden branches (folded content, other
+-- tabs) and anything outside the clipping frames it sits in (rows scrolled out of a column). Returns the list, Root
+-- first, and the same as a set. Fading only these is what keeps a fade off the frame time: see Library:Toggle and
+-- Tab:ShowTab for the measurements.
+local CULL_MARGIN = 40; -- px around a clipping frame still counted as on screen (glows spill past their frames)
+
+function Library:ShownTree(Root)
+    local Shown, InShown = { Root }, { [Root] = true };
+
+    -- X0..Y1: the window of the clipping frames Node sits in (nil = none)
+    local function Collect(Node, X0, Y0, X1, Y1)
+        for _, Child in next, Node:GetChildren() do
+            if Child:IsA('GuiObject') then
+                if Child.Visible then
+                    local Pos, Size = Child.AbsolutePosition, Child.AbsoluteSize;
+                    local AX, AY = Pos.X, Pos.Y;
+                    local BX, BY = AX + Size.X, AY + Size.Y;
+
+                    if not X0 or (BX >= X0 - CULL_MARGIN and AX <= X1 + CULL_MARGIN
+                        and BY >= Y0 - CULL_MARGIN and AY <= Y1 + CULL_MARGIN) then
+
+                        Shown[#Shown + 1] = Child;
+                        InShown[Child] = true;
+
+                        if Child.ClipsDescendants then
+                            Collect(Child,
+                                X0 and math.max(X0, AX) or AX, Y0 and math.max(Y0, AY) or AY,
+                                X1 and math.min(X1, BX) or BX, Y1 and math.min(Y1, BY) or BY);
+                        else
+                            Collect(Child, X0, Y0, X1, Y1);
+                        end;
+                    end;
+                end;
+            elseif Child:IsA('UIStroke') then
+                Shown[#Shown + 1] = Child;
+                InShown[Child] = true;
+            end;
+        end;
+    end;
+
+    Collect(Root);
+    return Shown, InShown;
+end;
+
 -- Delay (optional): seconds before the tween starts; a tree being shown goes transparent at once and waits.
+-- Only (optional): the instances to fade instead of the whole tree, e.g. Library:ShownTree(Root).
 -- Rest.Tweens: the fades started with this Rest, so RestoreTree can stop the ones still running.
-function Library:FadeTree(Root, Visible, Time, Rest, Delay)
+function Library:FadeTree(Root, Visible, Time, Rest, Delay, Only)
     Rest = Rest or {};
     local Tweens = Rest.Tweens or {};
     Rest.Tweens = Tweens;
     local Info = TweenInfo.new(Time, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, Delay or 0);
 
-    local List = Root:GetDescendants();
-    table.insert(List, 1, Root); -- the root as well: a label row is itself the thing to fade
+    local List = Only;
+
+    if not List then
+        List = Root:GetDescendants();
+        table.insert(List, 1, Root); -- the root as well: a label row is itself the thing to fade
+    end;
 
     for _, Desc in next, List do
         local Properties = TreeFadeProperties(Desc);
@@ -6661,15 +6836,163 @@ function Library:CreateWindow(...)
 
     -- as wide as the window less a margin, and cut with "..." there: a zero-width label let a long title run out
     -- past both edges of a narrowed window
+    -- Title alone sits centred, as always. With Version / Channel / Subtitle / TitleNote the bar becomes a header: the
+    -- title on the left with the version and the channel as badges, the subtitle centred, the note (an invite, a
+    -- status) on the right.
+    local Header = Config.Version or Config.Channel or Config.Subtitle or Config.TitleNote;
+    local TITLE_BAR, TITLE_PAD = TITLE_HEIGHT + (Glass and 8 or 0), 12;
     local WindowLabel = Library:CreateLabel({
-        Position = UDim2.new(0, 10, 0, 0);
-        Size = UDim2.new(1, -20, 0, TITLE_HEIGHT + (Glass and 8 or 0));
+        Position = UDim2.new(0, Header and TITLE_PAD or 10, 0, 0);
+        Size = UDim2.new(1, -20, 0, TITLE_BAR);
         Text = Config.Title or '';
         TextTruncate = Enum.TextTruncate.AtEnd;
-        TextXAlignment = Enum.TextXAlignment.Center;
+        TextXAlignment = Header and Enum.TextXAlignment.Left or Enum.TextXAlignment.Center;
         ZIndex = 1;
         Parent = Inner;
     });
+
+    local FitTitle = function() end;
+
+    if Header then
+        local Subtitle, Note;
+        local SubtitleWidth, NoteWidth = 0, 0;
+        local Badges = {}; -- { frame, width }, left to right after the title
+
+        -- Pill after the title: Tint over the menu color as the fill (Mix = how much of it), Tint as the outline.
+        -- Tint is a registry color key (follows the theme) or a fixed Color3; TintText colors the text too.
+        local function AddBadge(Text, TextSize, Tint, Mix, TintText)
+            local Fixed = typeof(Tint) == 'Color3';
+            local function Color() return Fixed and Tint or Library[Tint]; end;
+
+            local Width = Library:GetTextBounds(Text, Library.Font, TextSize) + 14;
+            local Badge = Library:Create('Frame', {
+                AnchorPoint = Vector2.new(0, 0.5);
+                BackgroundColor3 = Library.MainColor;
+                BorderSizePixel = 0;
+                Size = UDim2.fromOffset(Width, 18);
+                ZIndex = 1;
+                Parent = Inner;
+            });
+
+            Library:AddToRegistry(Badge, { BackgroundColor3 = 'MainColor' });
+            Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = Badge });
+
+            -- The tint is a see-through frame of its own in the accent: a plain registry color key, which is what an
+            -- animated or gradient accent repaints (Library:UpdateAccentColors). Mixed into one color it needed a
+            -- function there, and those only run on a theme change: with the rainbow on, the badge stayed the red
+            -- the rainbow happened to be at when the window was built.
+            local Fill = Library:Create('Frame', {
+                BackgroundColor3 = Color();
+                BackgroundTransparency = 1 - Mix;
+                BorderSizePixel = 0;
+                Size = UDim2.fromScale(1, 1);
+                ZIndex = 2;
+                Parent = Badge;
+            });
+
+            Library:Create('UICorner', { CornerRadius = UDim.new(1, 0); Parent = Fill });
+
+            local Stroke = Library:Create('UIStroke', {
+                Color = Color();
+                Thickness = 1;
+                ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+                Parent = Badge;
+            });
+
+            local Label = Library:CreateLabel({
+                Size = UDim2.fromScale(1, 1);
+                Text = Text;
+                TextSize = TextSize;
+                ZIndex = 3;
+                Parent = Badge;
+            });
+
+            if TintText then
+                Library:RemoveFromRegistry(Label);
+                Label.TextColor3 = Color();
+            end;
+
+            if not Fixed then
+                Library:AddToRegistry(Fill, { BackgroundColor3 = Tint });
+                Library:AddToRegistry(Stroke, { Color = Tint });
+                if TintText then Library:AddToRegistry(Label, { TextColor3 = Tint }); end;
+            end;
+
+            table.insert(Badges, { Badge, Width });
+        end;
+
+        if Config.Version then
+            AddBadge(Config.Version, 12, 'AccentColor', 0.35);
+        end;
+
+        if Config.Channel then -- the release channel (BETA, ...): green on every theme, apart from the accent
+            AddBadge(Config.Channel, 11, Color3.fromRGB(152, 195, 121), 0.25, true);
+        end;
+
+        if Config.Subtitle then
+            SubtitleWidth = Library:GetTextBounds(Config.Subtitle, Library.Font, 14);
+            Subtitle = Library:CreateLabel({
+                AnchorPoint = Vector2.new(0.5, 0);
+                Position = UDim2.fromScale(0.5, 0);
+                Size = UDim2.fromOffset(SubtitleWidth + 2, TITLE_BAR);
+                Text = Config.Subtitle;
+                TextSize = 14;
+                TextTransparency = 0.2; -- a step under the title; 0.5 was too faint to read
+                ZIndex = 1;
+                Parent = Inner;
+            });
+        end;
+
+        if Config.TitleNote then
+            NoteWidth = Library:GetTextBounds(Config.TitleNote, Library.Font, 14);
+            Note = Library:CreateLabel({
+                AnchorPoint = Vector2.new(1, 0);
+                Position = UDim2.new(1, -TITLE_PAD, 0, 0);
+                Size = UDim2.fromOffset(NoteWidth + 2, TITLE_BAR);
+                Text = Config.TitleNote;
+                TextSize = 14;
+                TextTransparency = 0.2;
+                TextXAlignment = Enum.TextXAlignment.Right;
+                ZIndex = 1;
+                Parent = Inner;
+            });
+        end;
+
+        -- A narrowed window drops what no longer fits instead of running the texts into each other: the subtitle
+        -- first, then the note. From the window's own Size, as its AbsoluteSize moves with the open / close scale.
+        FitTitle = function()
+            local Width = Outer.Size.X.Scale == 0 and Outer.Size.X.Offset or Inner.AbsoluteSize.X;
+            local Left = TITLE_PAD + Library:GetTextBounds(WindowLabel.Text, Library.Font, 16);
+            local GAP = 16;
+
+            for Index, Badge in next, Badges do
+                local Gap = Index == 1 and 10 or 6;
+                Badge[1].Position = UDim2.fromOffset(Left + Gap, TITLE_BAR / 2);
+                Left = Left + Gap + Badge[2];
+            end;
+
+            local ShowNote = Note ~= nil and Left + GAP + NoteWidth + TITLE_PAD <= Width;
+            if Note then Note.Visible = ShowNote; end;
+
+            -- Centred in the window while that clears its neighbours, else centred in the room between them (the
+            -- menu's default 550 px with two badges and an invite), else hidden.
+            if Subtitle then
+                local From = Left + GAP;
+                local To = Width - (ShowNote and NoteWidth + TITLE_PAD + GAP or TITLE_PAD);
+                local Centre = Width / 2;
+
+                if Centre - SubtitleWidth / 2 < From or Centre + SubtitleWidth / 2 > To then
+                    Centre = (From + To) / 2;
+                end;
+
+                Subtitle.Visible = To - From >= SubtitleWidth;
+                Subtitle.Position = UDim2.fromOffset(math.floor(Centre), 0);
+            end;
+        end;
+
+        Outer:GetPropertyChangedSignal('Size'):Connect(FitTitle);
+        FitTitle();
+    end;
 
     local MainSectionOuter = Library:Create('Frame', {
         BackgroundColor3 = Library.BackgroundColor;
@@ -6990,6 +7313,7 @@ function Library:CreateWindow(...)
 
     function Window:SetWindowTitle(Title)
         WindowLabel.Text = Title;
+        FitTitle();
     end;
 
     -- Removes this window, its sections and their floating panels. For scripts that rebuild their window on the
@@ -7162,12 +7486,13 @@ function Library:CreateWindow(...)
             return SectionCount * 10;
         end;
 
-        -- Switching tabs (Library.Animations): the new content slides in from the side of the tab that was clicked
-        -- (a tab to the right comes in from the right) while fading in, and the old one slides out the other way
-        -- fading out. Tab.FadeRest holds a tab's real transparencies for as long as either fade runs on it. A fade that
-        -- starts without them takes whatever the content shows at that moment for real, and a tab caught half faded
-        -- (clicked through quickly, or while the menu itself fades) stayed faded for good.
-        local SLIDE_PX, SLIDE_TIME = 40, 0.22;
+        -- Switching tabs (Library.Animations): the new content fades in over a short slide from the side of the tab that
+        -- was clicked (a tab to the right comes in from the right); the old content goes at once. It used to slide out
+        -- 40 px the other way under the new one coming in: two pages of text crossing each other for a fifth of a
+        -- second, which is restless to look at. Tab.FadeRest holds a tab's real transparencies for as long as its
+        -- fade runs. A fade that starts without them takes whatever the content shows at that moment for real, and a
+        -- tab caught half faded (clicked through quickly, or while the menu itself fades) stayed faded for good.
+        local SLIDE_PX, SLIDE_TIME = 12, 0.2;
 
         -- Ends this tab's slide at once, its content back at its real transparencies (Library:Toggle reads them).
         function Tab:EndSlide()
@@ -7188,8 +7513,6 @@ function Library:CreateWindow(...)
                 Direction = 0;
             end;
 
-            Window.SlideDirection = Direction;
-
             for _, Other in next, Window.Tabs do
                 if Other ~= Tab then
                     Other:HideTab();
@@ -7208,7 +7531,10 @@ function Library:CreateWindow(...)
 
             if Library.Animations and Direction ~= 0 then
                 TabFrame.Position = UDim2.fromOffset(Direction * SLIDE_PX, 0);
-                Tab.FadeRest = Library:FadeTree(TabFrame, true, SLIDE_TIME, Tab.FadeRest);
+                -- Only what is on screen: fading the whole page (2048 instances on the largest tab of the Anime
+                -- Adventures menu) took 25 ms and made a 47 ms frame at the start of every switch, against 11 ms
+                -- for a switch without animation (live, 2026-11-22). The rest keeps its real values, unseen.
+                Tab.FadeRest = Library:FadeTree(TabFrame, true, SLIDE_TIME, Tab.FadeRest, nil, (Library:ShownTree(TabFrame)));
                 Library:Animate(TabFrame, SLIDE_TIME, { Position = UDim2.new() });
 
                 task.delay(SLIDE_TIME + 0.02, function()
@@ -7224,30 +7550,10 @@ function Library:CreateWindow(...)
         end;
 
         function Tab:HideTab()
-            local WasActive = TabActive;
             TabActive = false;
             FadeTabLabel(0.45);
-
-            if not (WasActive and Library.Animations and (Window.SlideDirection or 0) ~= 0) then
-                TabFrame.Visible = false;
-                return;
-            end;
-
-            local Token = {};
-            Tab.FadeToken = Token;
-            Tab.FadeRest = Library:FadeTree(TabFrame, false, SLIDE_TIME, Tab.FadeRest);
-            Library:Animate(TabFrame, SLIDE_TIME, { Position = UDim2.fromOffset(-Window.SlideDirection * SLIDE_PX, 0) });
-
-            task.delay(SLIDE_TIME + 0.02, function()
-                if Tab.FadeToken ~= Token then
-                    return; -- shown again meanwhile
-                end;
-
-                TabFrame.Visible = false;
-                TabFrame.Position = UDim2.new();
-                Library:RestoreTree(Tab.FadeRest);
-                Tab.FadeRest = nil;
-            end);
+            -- A fade-in still running on it carries on unseen to its real values (Tab.FadeRest, ShowTab).
+            TabFrame.Visible = false;
         end;
 
         function Tab:SetLayoutOrder(Position)
@@ -7858,7 +8164,9 @@ function Library:CreateWindow(...)
         end;
     end;
 
-    -- Scales the whole window slightly while it fades, which reads a lot smoother than a flat alpha fade.
+    -- Scales the whole window slightly while it fades, which reads a lot smoother than a flat alpha fade. 3%: at 5%
+    -- the edges of a 550 px window travelled 14 px each, enough to read as a zoom instead of a fade.
+    local MENU_ZOOM = 0.97;
     local WindowScale = Library:Create('UIScale', {
         Scale = Library.UIScale;
         Parent = Outer;
@@ -7889,44 +8197,9 @@ function Library:CreateWindow(...)
     -- Everything else keeps its real transparencies throughout; nobody sees it.
     -- Faded: the instances a fade has touched and that may not be back at their real values yet.
     local Faded = {};
-    local CULL_MARGIN = 40; -- px around a clipping frame still counted as on screen (glows spill past their frames)
 
     local function FadedShown()
-        local Shown, InShown = { Outer }, { [Outer] = true };
-
-        -- X0..Y1: the window of the clipping frames Node sits in (nil = none)
-        local function Collect(Node, X0, Y0, X1, Y1)
-            for _, Child in next, Node:GetChildren() do
-                if Child:IsA('GuiObject') then
-                    if Child.Visible then
-                        local Pos, Size = Child.AbsolutePosition, Child.AbsoluteSize;
-                        local AX, AY = Pos.X, Pos.Y;
-                        local BX, BY = AX + Size.X, AY + Size.Y;
-
-                        if not X0 or (BX >= X0 - CULL_MARGIN and AX <= X1 + CULL_MARGIN
-                            and BY >= Y0 - CULL_MARGIN and AY <= Y1 + CULL_MARGIN) then
-
-                            Shown[#Shown + 1] = Child;
-                            InShown[Child] = true;
-
-                            if Child.ClipsDescendants then
-                                Collect(Child,
-                                    X0 and math.max(X0, AX) or AX, Y0 and math.max(Y0, AY) or AY,
-                                    X1 and math.min(X1, BX) or BX, Y1 and math.min(Y1, BY) or BY);
-                            else
-                                Collect(Child, X0, Y0, X1, Y1);
-                            end;
-                        end;
-                    end;
-                elseif Child:IsA('UIStroke') then
-                    Shown[#Shown + 1] = Child;
-                    InShown[Child] = true;
-                end;
-            end;
-        end;
-
-        Collect(Outer);
-        return Shown, InShown;
+        return Library:ShownTree(Outer);
     end;
 
     local function RunCursor()
@@ -8021,6 +8294,7 @@ function Library:CreateWindow(...)
         ModalElement.Modal = Toggled;
         Library.Toggled = Toggled;
         Library:UpdateFloatingSections();
+        if Library.LayoutLoaded then Library:SaveLayout(); end;
 
         ToggleGeneration = ToggleGeneration + 1;
         local Generation = ToggleGeneration;
@@ -8056,7 +8330,7 @@ function Library:CreateWindow(...)
             Outer.Visible = true;
 
             if FromHidden then
-                WindowScale.Scale = 0.95 * Library.UIScale;
+                WindowScale.Scale = MENU_ZOOM * Library.UIScale;
             end;
 
             if not IsMobile then RunCursor(); end; -- no drawn cursor on touch-only screens
@@ -8068,7 +8342,7 @@ function Library:CreateWindow(...)
             end;
         end;
 
-        Play(WindowScale, { Scale = (Toggled and 1 or 0.95) * Library.UIScale });
+        Play(WindowScale, { Scale = (Toggled and 1 or MENU_ZOOM) * Library.UIScale });
 
         local Shown, InShown = FadedShown();
 
@@ -8492,19 +8766,25 @@ local ThemeManager = {} do
 	-- and Accent groupbox (animate, gradient, direction, custom colors). Call before ApplyToTab so the
 	-- built-in accent toggles there are skipped. Returns the Menu and Accent groupboxes.
 	function ThemeManager:BuildMenuSection(tab)
-		-- one 'Menu' tabbox: General (behaviour, HUD, layout) and Look (cursor, glow)
+		-- One 'Menu' tabbox, a handful of controls a tab: General (keybind, scale, HUD, layout), Motion (animations,
+		-- dragging), Glass (opacity and blur; frosted glass windows only) and Look (cursor, glow). Twelve controls
+		-- in General alone read as clutter. The option ids are unchanged, so saved settings still load.
 		local MenuTabs = tab:AddLeftTabbox('Menu')
-		local MenuGroup, LookGroup = MenuTabs:AddTab('General'), MenuTabs:AddTab('Look')
+		local MenuGroup, MotionGroup = MenuTabs:AddTab('General'), MenuTabs:AddTab('Motion')
+		local GlassGroup = Library.Blur and MenuTabs:AddTab('Glass') -- a script that set GlassTransparency = 0 keeps its solid menu
+		local LookGroup = MenuTabs:AddTab('Look')
 
 		MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
 		MenuGroup:AddSlider('UIScale', { Text = 'UI scale', Default = 1, Min = 0.5, Max = 2, Rounding = 2, Suffix = 'x', HideMax = true, Tooltip = 'Size of the menu and its popups' })
-		MenuGroup:AddToggle('UIAnimations', { Text = 'Animations', Default = true, Tooltip = 'Eased fades, slides and hovers. Off: everything changes instantly', Callback = function(Value) Library.Animations = Value end })
-		MenuGroup:AddToggle('LightDrag', { Text = 'Light drag', Default = true, Tooltip = 'Drag the menu as an outline and move it on release: no FPS drop while dragging. Off: the menu follows the cursor', Callback = function(Value) Library.LightDrag = Value end })
-		MenuGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
-		if Library.Blur then -- frosted glass windows only: a script that set GlassTransparency = 0 keeps its solid menu
-			MenuGroup:AddSlider('MenuOpacity', { Text = 'Menu opacity', Default = math.floor((1 - Library.GlassTransparency) * 100 + 0.5), Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true, Tooltip = 'How solid the menu background is. Lower shows more of the blurred game behind it; 100% is solid and turns the blur off' })
+		MotionGroup:AddToggle('UIAnimations', { Text = 'Animations', Default = true, Tooltip = 'Eased fades, slides and hovers. Off: everything changes instantly', Callback = function(Value) Library.Animations = Value end })
+		MotionGroup:AddToggle('LightDrag', { Text = 'Light drag', Default = true, Tooltip = 'Drag the menu as an outline and move it on release: no FPS drop while dragging. Off: the menu follows the cursor', Callback = function(Value) Library.LightDrag = Value end })
+		MotionGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
+		if GlassGroup then
+			GlassGroup:AddSlider('MenuOpacity', { Text = 'Menu opacity', Default = math.floor((1 - Library.GlassTransparency) * 100 + 0.5), Min = 20, Max = 100, Rounding = 0, Suffix = '%', HideMax = true, Tooltip = 'How solid the menu background is. Lower shows more of the blurred game behind it; 100% is solid and turns the blur off' })
 			Options.MenuOpacity:OnChanged(function(Value) Library:SetGlassTransparency(1 - Value / 100) end)
-			MenuGroup:AddToggle('BlurBillboards', { Text = 'Blur name tags', Default = true, Tooltip = 'While the menu is open, the game\'s name tags, health bars and damage numbers behind it blur with the scene. Off: they show sharp through the menu', Callback = function(Value) Library.BlurBillboards = Value end })
+			GlassGroup:AddSlider('BlurStrength', { Text = 'Blur strength', Default = 100, Min = 0, Max = 100, Rounding = 0, Suffix = '%', HideMax = true, Tooltip = 'How strongly the game behind the menu is blurred. 100% is the most the effect gives; 0% shows the game sharp' })
+			Options.BlurStrength:OnChanged(function(Value) Library.BlurStrength = Value / 100 end)
+			GlassGroup:AddToggle('BlurBillboards', { Text = 'Blur name tags', Default = true, Tooltip = 'While the menu is open, the game\'s name tags, health bars and damage numbers behind it blur with the scene. Off: they show sharp through the menu', Callback = function(Value) Library.BlurBillboards = Value end })
 		end
 		MenuGroup:AddToggle('ShowWatermark', { Text = 'Show watermark', Default = true, Tooltip = 'FPS / ping bar at the top of the screen' })
 		MenuGroup:AddToggle('ShowKeybinds', { Text = 'Show keybind list', Default = true, Tooltip = 'HUD listing active keybinds (hidden while empty)' })
@@ -8532,6 +8812,7 @@ local ThemeManager = {} do
 		Toggles.WindowGlow:OnChanged(ApplyGlow)
 		Options.GlowSize:OnChanged(ApplyGlow)
 		Options.GlowStrength:OnChanged(ApplyGlow)
+		MenuGroup:AddDivider()
 		MenuGroup:AddButton({ Text = 'Reset layout', Func = function() Library:ResetLayout() end, Tooltip = 'Drag a section by its title to move it, or drop it outside the menu to keep it on screen. This puts every section back' })
 		MenuGroup:AddButton('Unload', function() Library:Unload() end)
 
