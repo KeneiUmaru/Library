@@ -37,6 +37,11 @@
                                                   -- a URL or workspace file) adds a banner on top, cropped to
                                                   -- ImageHeight px (72), the title over its lower edge.
                                                   -- :SetTitle(s), :SetText(s), :SetImage(source or nil)
+        AddSlider Info.Range = true               -- one track, two ends: Default / Value / SetValue / callbacks use
+                                                  -- { low, high } (saved as 'low,high'); Info.Format(low, high)
+        Library:SetBackgroundEffect(name or nil)  -- decoration behind the main window's content: Fireflies, Waves, Sun,
+                                                  -- Embers, Grid, Stars, Petals, Snow, Glow, Scanlines. Built-in themes
+                                                  -- set their own; Library:SetBackgroundEffects(false) turns them off
         Library:Modal({ Title, Text, Buttons = { 'Delete', 'Cancel' } }) -- dialog over the dimmed window; yields and
                                                   -- returns the picked button's text. The first button is the accent
                                                   -- one, on the right
@@ -206,7 +211,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 19;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 21;         -- bump when the public API changes; clients check this against the GitHub copy
                           -- 14: AddSlider Info.Format(Value) -> display text
                           -- 15: AddDropdown Info.ValueIcons
                           -- 16: Groupbox:AddIconLabel
@@ -446,6 +451,10 @@ function Library:UpdateAccentColors(List)
             end
         end
     end
+
+    if not List then
+        Library:PaintBackgroundEffect();
+    end;
 
     if Library.WindowBorderGradient and (not List) then
         local Direction = Library.GradientDirection;
@@ -1094,6 +1103,8 @@ function Library:UpdateColorsUsingRegistry()
             end
         end;
     end;
+
+    Library:PaintBackgroundEffect();
 end;
 
 function Library:GiveSignal(Signal)
@@ -3878,8 +3889,19 @@ do
         assert(Info.Max, 'AddSlider: Missing maximum value.');
         assert(Info.Rounding, 'AddSlider: Missing rounding value.');
 
+        -- Range mode (Info.Range = true): one track, two ends. Value, Default, SetValue and the callbacks then use
+        -- { low, high }; it is saved as 'low,high'. Press nearer an end to drag that end; they cannot cross.
+        local Ranged = Info.Range == true;
+
+        if Ranged then
+            local Low, High = type(Info.Default) == 'table' and tonumber(Info.Default[1]), type(Info.Default) == 'table' and tonumber(Info.Default[2]);
+            assert(Low and High, 'AddSlider: a Range slider needs Default = { low, high }.');
+            Info.Default = { math.clamp(math.min(Low, High), Info.Min, Info.Max), math.clamp(math.max(Low, High), Info.Min, Info.Max) };
+        end;
+
         local Slider = {
             Value = Info.Default;
+            Range = Ranged;
             Min = Info.Min;
             Max = Info.Max;
             Rounding = Info.Rounding;
@@ -3942,7 +3964,49 @@ do
 
         local FillGlow = Library:AddGlow(Fill, 6, 6, 'AccentColor');
         -- the value, not Fill.Size: the fill is tweened, and right after a change it still has its old width
-        Library:TrackElementGlow(FillGlow, function() return Slider.Value > Slider.Min; end);
+        Library:TrackElementGlow(FillGlow, function()
+            if Ranged then
+                return Slider.Value[2] > Slider.Value[1];
+            end;
+
+            return Slider.Value > Slider.Min;
+        end);
+
+        -- Range mode: the fill is the band between the two ends, strongest at them so the text in the middle stays
+        -- readable, with a bright edge on each end to show what can be dragged.
+        local Edges = {};
+
+        if Ranged then
+            Fill.BorderSizePixel = 0;
+            Library:Create('UIGradient', {
+                Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 0.05), NumberSequenceKeypoint.new(0.5, 0.65), NumberSequenceKeypoint.new(1, 0.05),
+                });
+                Parent = Fill;
+            });
+
+            for Index = 1, 2 do
+                local Edge = Library:Create('Frame', {
+                    BackgroundColor3 = Library.AccentColor;
+                    BorderSizePixel = 0;
+                    Position = UDim2.fromOffset(0, -1);
+                    Size = UDim2.new(0, 2, 1, 2);
+                    ZIndex = 8;
+                    Parent = SliderInner;
+                });
+                Library:AddToRegistry(Edge, { BackgroundColor3 = 'AccentColor' });
+                -- lightened with a white layer, not a mixed color: a rainbow accent repaints only plain accent entries
+                Library:Create('Frame', {
+                    BackgroundColor3 = Color3.new(1, 1, 1);
+                    BackgroundTransparency = 0.55;
+                    BorderSizePixel = 0;
+                    Size = UDim2.fromScale(1, 1);
+                    ZIndex = 8;
+                    Parent = Edge;
+                });
+                Edges[Index] = Edge;
+            end;
+        end;
 
         local HideBorderRight = Library:Create('Frame', {
             BackgroundColor3 = Library.AccentColor;
@@ -3981,6 +4045,22 @@ do
 
         function Slider:Display()
             local Suffix = Info.Suffix or '';
+
+            if Ranged then
+                local Low, High = Slider.Value[1], Slider.Value[2];
+                local Shown = Info.Format and tostring(Info.Format(Low, High)) or (Low .. Suffix .. ' - ' .. High .. Suffix);
+                DisplayLabel.Text = Info.Compact and (Info.Text .. ': ' .. Shown) or Shown;
+
+                local A = math.ceil(Library:MapValue(Low, Slider.Min, Slider.Max, 0, Slider.MaxSize));
+                local B = math.ceil(Library:MapValue(High, Slider.Min, Slider.Max, 0, Slider.MaxSize));
+                Library:Animate(Fill, 0.08, { Position = UDim2.fromOffset(A, 0), Size = UDim2.new(0, B - A, 1, 0) });
+                Library:Animate(Edges[1], 0.08, { Position = UDim2.fromOffset(math.min(A, Slider.MaxSize - 2), -1) });
+                Library:Animate(Edges[2], 0.08, { Position = UDim2.fromOffset(math.max(B - 2, 0), -1) });
+                Library:ApplyElementGlow(FillGlow, true);
+                HideBorderRight.Visible = false;
+
+                return;
+            end;
 
             -- Info.Format(Value) -> text, for values that mean something special (e.g. "Default" at the minimum)
             local Shown = Info.Format and tostring(Info.Format(Slider.Value)) or nil;
@@ -4023,15 +4103,34 @@ do
                 return Library:RunOnUIThread(Slider.SetValue, Slider, Str);
             end;
 
-            local Num = tonumber(Str);
+            if Ranged then
+                local Low, High;
 
-            if (not Num) then
-                return;
+                if type(Str) == 'table' then
+                    Low, High = tonumber(Str[1]), tonumber(Str[2]);
+                else
+                    Low, High = tostring(Str):match('^%s*(%-?[%d%.]+)%s*,%s*(%-?[%d%.]+)%s*$');
+                    Low, High = tonumber(Low), tonumber(High);
+                end;
+
+                if not (Low and High) then
+                    return;
+                end;
+
+                Slider.Value = {
+                    math.clamp(math.min(Low, High), Slider.Min, Slider.Max),
+                    math.clamp(math.max(Low, High), Slider.Min, Slider.Max),
+                };
+            else
+                local Num = tonumber(Str);
+
+                if (not Num) then
+                    return;
+                end;
+
+                Slider.Value = math.clamp(Num, Slider.Min, Slider.Max);
             end;
 
-            Num = math.clamp(Num, Slider.Min, Slider.Max);
-
-            Slider.Value = Num;
             Slider:Display();
 
             Library:SafeCallback(Slider.Callback, Slider.Value);
@@ -4040,13 +4139,49 @@ do
         end;
 
         -- The value under the pointer (mouse, or the last touch).
-        local function FollowPointer()
+        -- Grip (Range mode): the end being dragged, 1 = low, 2 = high; returns it, for the next call.
+        local function FollowPointer(Grip)
             -- Mouse is in screen pixels, the track width (MaxSize) is unscaled; divide by the window
             -- scale so the fill tracks the cursor at any UI scale.
             local Scale = Library.WindowScale and Library.WindowScale.Scale or 1;
             local nX = math.clamp((Mouse.X - SliderInner.AbsolutePosition.X) / Scale, 0, Slider.MaxSize);
 
             local nValue = Slider:GetValueFromXOffset(nX);
+
+            if Ranged then
+                local Low, High = Slider.Value[1], Slider.Value[2];
+
+                if not Grip then
+                    if Low == High then
+                        -- both ends on one value: the way the pointer goes picks the end
+                        Grip = (nValue < Low and 1) or (nValue > High and 2) or nil;
+                    else
+                        local A = Library:MapValue(Low, Slider.Min, Slider.Max, 0, Slider.MaxSize);
+                        local B = Library:MapValue(High, Slider.Min, Slider.Max, 0, Slider.MaxSize);
+                        Grip = math.abs(nX - A) <= math.abs(nX - B) and 1 or 2;
+                    end;
+
+                    if not Grip then
+                        return nil;
+                    end;
+                end;
+
+                if Grip == 1 then
+                    nValue = math.min(nValue, High);
+                else
+                    nValue = math.max(nValue, Low);
+                end;
+
+                if nValue ~= Slider.Value[Grip] then
+                    Slider.Value = Grip == 1 and { nValue, High } or { Low, nValue };
+                    Slider:Display();
+                    Library:SafeCallback(Slider.Callback, Slider.Value);
+                    Library:SafeCallback(Slider.Changed, Slider.Value);
+                end;
+
+                return Grip;
+            end;
+
             local OldValue = Slider.Value;
             Slider.Value = nValue;
 
@@ -4101,8 +4236,10 @@ do
                 end;
             end;
 
+            local Grip;
+
             while IsHeld() do
-                FollowPointer();
+                Grip = FollowPointer(Grip);
                 RenderStepped:Wait();
             end;
 
@@ -6826,6 +6963,399 @@ function Library:RestoreTree(Rest)
     end;
 end;
 
+-- =====================================================================
+-- Theme background effects: a decoration drawn behind the main window's content (fireflies, waves, embers, ...).
+-- A built-in theme names its effect as its third field (ThemeManager.BuiltInThemes); ThemeManager:ApplyTheme sets it.
+--   Library:SetBackgroundEffect(Name or nil)    one of Library.BackgroundEffects' keys
+--   Library:SetBackgroundEffects(Enabled)       the Settings > Menu > Look switch
+-- Pieces are plain frames, so the menu's open / close fade treats them like any other frame. That fade tweens
+-- BackgroundTransparency, and a second tween on a property cancels the first, so nothing here animates a
+-- transparency: things move, turn and change size instead. (A CanvasGroup would fade as one, but its
+-- GroupTransparency does nothing in this executor's CoreGui, see Library:FadeTree.)
+-- Colors: a piece is painted with the theme color it names, again on a theme change and on every rainbow step.
+-- Loops are paused while the menu is hidden and not started at all with Library.Animations off.
+-- =====================================================================
+Library.BackgroundEffect = nil;        -- the current theme's effect
+Library.BackgroundEffectsOn = true;
+Library.BackgroundEffects = {};        -- [Name] = function(Fx, W, H): builds the effect for a W x H px layer
+
+local EffectPieces, EffectTweens = {}, {};
+local EffectBuilt = { W = 0, H = 0 };
+local EffectRandom = Random.new();
+local LINEAR = Enum.EasingStyle.Linear;
+
+local Fx = {};
+
+-- A frame centred on (X, Y). Key: 'AccentColor' / 'FontColor' / a Color3 that stays. Round: corner radius as a share
+-- of the short side (1 = pill), false = square.
+function Fx.Piece(Parent, X, Y, W, H, Alpha, Key, Round, Rotation)
+    local Fixed = typeof(Key) == 'Color3';
+    local Frame = Instance.new('Frame');
+    Frame.AnchorPoint = Vector2.new(0.5, 0.5);
+    Frame.BackgroundColor3 = Fixed and Key or Library[Key];
+    Frame.BackgroundTransparency = Alpha;
+    Frame.BorderSizePixel = 0;
+    Frame.Position = UDim2.fromOffset(X, Y);
+    Frame.Rotation = Rotation or 0;
+    Frame.Size = UDim2.fromOffset(W, H);
+    Frame.ZIndex = 2;
+
+    if Round then
+        local Corner = Instance.new('UICorner');
+        Corner.CornerRadius = UDim.new(Round, 0);
+        Corner.Parent = Frame;
+    end;
+
+    Frame.Parent = Parent;
+
+    if not Fixed then
+        EffectPieces[#EffectPieces + 1] = { Frame, Key };
+    end;
+
+    return Frame;
+end;
+
+-- A soft band: a block of one color fading out along Rotation (Stops = { { position, transparency }, ... }).
+function Fx.Band(Parent, X, Y, W, H, Key, Rotation, Stops, Round, Turn)
+    local Frame = Fx.Piece(Parent, X, Y, W, H, 0, Key, Round, Turn);
+    local Points = {};
+
+    for Index, Stop in ipairs(Stops) do
+        Points[Index] = NumberSequenceKeypoint.new(Stop[1], Stop[2]);
+    end;
+
+    local Gradient = Instance.new('UIGradient');
+    Gradient.Rotation = Rotation;
+    Gradient.Transparency = NumberSequence.new(Points);
+    Gradient.Parent = Frame;
+
+    return Frame;
+end;
+
+-- Endless one-way motion from From to To, entered part-way along so a new effect does not start as one burst.
+function Fx.Flow(Frame, Time, From, To)
+    local Start = EffectRandom:NextNumber();
+
+    for Property, Value in next, From do
+        Frame[Property] = type(Value) == 'number' and Value + (To[Property] - Value) * Start or Value:Lerp(To[Property], Start);
+    end;
+
+    if not Library.Animations then
+        return;
+    end;
+
+    local Slot = #EffectTweens + 1;
+    local First = TweenService:Create(Frame, TweenInfo.new(Time * (1 - Start), LINEAR), To);
+    EffectTweens[Slot] = First;
+
+    First.Completed:Connect(function(State)
+        if State ~= Enum.PlaybackState.Completed or EffectTweens[Slot] ~= First then
+            return; -- cancelled: the effect was rebuilt
+        end;
+
+        for Property, Value in next, From do
+            Frame[Property] = Value;
+        end;
+
+        local Loop = TweenService:Create(Frame, TweenInfo.new(Time, LINEAR, Enum.EasingDirection.InOut, -1), To);
+        EffectTweens[Slot] = Loop;
+        Loop:Play();
+    end);
+
+    First:Play();
+end;
+
+-- Back and forth between the frame's current values and Goal.
+function Fx.Sway(Frame, Time, Goal)
+    if not Library.Animations then
+        return;
+    end;
+
+    local Tween = TweenService:Create(Frame, TweenInfo.new(Time, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), Goal);
+    EffectTweens[#EffectTweens + 1] = Tween;
+    Tween:Play();
+end;
+
+local function Between(Low, High)
+    return EffectRandom:NextNumber(Low, High);
+end;
+
+Library.BackgroundEffects.Fireflies = function(Layer, W, H)
+    for _ = 1, math.clamp(math.floor(W * H / 5000), 12, 40) do
+        local X, Y, Size = Between(8, W - 8), Between(30, H - 8), EffectRandom:NextInteger(8, 14);
+        local Halo = Fx.Piece(Layer, X, Y, Size, Size, 0.9, 'AccentColor', 1);
+        local Core = Fx.Piece(Halo, 0, 0, 3, 3, Between(0.1, 0.5), 'FontColor', 1);
+        Core.Position = UDim2.fromScale(0.5, 0.5);
+        Fx.Sway(Halo, Between(5, 11), { Position = UDim2.fromOffset(X + Between(-30, 30), Y + Between(-20, 20)) });
+        Fx.Sway(Halo, Between(1.5, 3.5), { Size = UDim2.fromOffset(Size * 1.8, Size * 1.8) });
+    end;
+end;
+
+Library.BackgroundEffects.Waves = function(Layer, W, H)
+    local STEP = 8;
+
+    Fx.Band(Layer, W / 2, H - 45, W, 90, 'AccentColor', 90, { { 0, 1 }, { 1, 0.85 } });
+
+    for Index = 0, 2 do
+        local Length = 72 + Index * 24; -- a multiple of STEP, so the strip repeats without a seam
+        local Base, Height = H - 28 - Index * 26, 7 - Index;
+        local Strip = Instance.new('Frame');
+        Strip.BackgroundTransparency = 1;
+        Strip.Size = UDim2.fromOffset(W + Length, H);
+        Strip.ZIndex = 2;
+        Strip.Parent = Layer;
+
+        local function Level(X)
+            return Base + math.sin(X / Length * math.pi * 2) * Height;
+        end;
+
+        for X = 0, W + Length - STEP, STEP do
+            local A, B = Level(X), Level(X + STEP);
+            Fx.Piece(Strip, X + STEP / 2, (A + B) / 2, math.sqrt(STEP * STEP + (B - A) ^ 2) + 1, 2, 0.35 + Index * 0.2,
+                'AccentColor', false, math.deg(math.atan2(B - A, STEP)));
+        end;
+
+        local Left, Home = UDim2.fromOffset(-Length, 0), UDim2.new();
+        Fx.Flow(Strip, 14 + Index * 6, { Position = Index == 1 and Left or Home }, { Position = Index == 1 and Home or Left });
+    end;
+end;
+
+Library.BackgroundEffects.Sun = function(Layer, W, H)
+    local Radius = math.clamp(W * 0.26, 60, 130);
+    local CenterY = H + Radius * 0.1;
+
+    Fx.Band(Layer, W / 2, H - 60, W, 120, 'AccentColor', 90, { { 0, 1 }, { 1, 0.82 } });
+
+    for Depth = 2, Radius, 2 do -- from the top of the disc down, in 2 px rows; rows left out are the dark stripes
+        local Rise = Radius - Depth;
+        local Gap = 2 + (Depth / Radius) * 5;
+
+        if Depth < Radius * 0.3 or Depth % 15 >= Gap then
+            Fx.Piece(Layer, W / 2, CenterY - Rise, 2 * math.sqrt(Radius * Radius - Rise * Rise), 2,
+                0.3 + (Depth / Radius) * 0.45, 'AccentColor', false);
+        end;
+    end;
+end;
+
+Library.BackgroundEffects.Embers = function(Layer, W, H)
+    Fx.Band(Layer, W / 2, H - 45, W, 90, 'AccentColor', 90, { { 0, 1 }, { 1, 0.72 } });
+
+    for _ = 1, math.clamp(math.floor(W / 13), 16, 44) do
+        local X, Size = Between(6, W - 6), EffectRandom:NextInteger(2, 4);
+        local Spark = Fx.Piece(Layer, X, H, Size, Size, Between(0.1, 0.4), 'AccentColor', 1);
+        Fx.Flow(Spark, Between(5, 10), -- shrinks away as it rises: fading it would fight the menu's own fade
+            { Position = UDim2.fromOffset(X, H + 4), Size = UDim2.fromOffset(Size, Size) },
+            { Position = UDim2.fromOffset(X + Between(-25, 25), H - H * Between(0.3, 0.85)), Size = UDim2.new() });
+    end;
+end;
+
+Library.BackgroundEffects.Grid = function(Layer, W, H)
+    for X = 0, W, 22 do
+        Fx.Piece(Layer, X, H / 2, 1, H, 0.88, 'AccentColor', false);
+    end;
+
+    for Y = 8, H, 22 do
+        Fx.Piece(Layer, W / 2, Y, W, 1, 0.88, 'AccentColor', false);
+    end;
+
+    Fx.Band(Layer, W / 2, H - 50, W, 100, 'AccentColor', 90, { { 0, 1 }, { 1, 0.8 } });
+end;
+
+Library.BackgroundEffects.Stars = function(Layer, W, H)
+    for _ = 1, math.clamp(math.floor(W * H / 2200), 30, 110) do
+        local Roll = EffectRandom:NextNumber();
+        local Size = Roll < 0.15 and 3 or (Roll < 0.55 and 2 or 1);
+        local Star = Fx.Piece(Layer, Between(4, W - 4), Between(28, H - 4), Size, Size, Between(0.15, 0.8),
+            EffectRandom:NextNumber() < 0.3 and 'AccentColor' or 'FontColor', Size > 1 and 1 or false);
+
+        if EffectRandom:NextNumber() < 0.35 then
+            Fx.Sway(Star, Between(1, 3), { Size = UDim2.new() });
+        end;
+    end;
+end;
+
+-- Cherry blossom: light from the canopy above, a few soft out-of-focus blossoms, and petals at three depths. A petal
+-- is carried down and across by its (empty) holder, and on its own rocks from side to side, spins, and turns over:
+-- its width folds to a line and back, which reads as the petal flipping in the air.
+Library.BackgroundEffects.Petals = function(Layer, W, H)
+    local WHITE = Color3.new(1, 1, 1);
+
+    Fx.Band(Layer, W / 2, 55, W, 110, 'AccentColor', 90, { { 0, 0.8 }, { 1, 1 } });
+
+    for _ = 1, math.clamp(math.floor(W / 110), 3, 8) do
+        local X, Y, Size = Between(0, W), Between(20, H), Between(26, 54);
+        local Blossom = Fx.Piece(Layer, X, Y, Size, Size, Between(0.9, 0.95), 'AccentColor', 1);
+        Fx.Sway(Blossom, Between(8, 14), { Position = UDim2.fromOffset(X + Between(-18, 18), Y + Between(-12, 12)) });
+    end;
+
+    for _ = 1, math.clamp(math.floor(W / 18), 14, 34) do
+        local Near = EffectRandom:NextNumber(); -- 0 = far: small, faint, slow
+        local Long = 5 + Near * 7;
+        local Wide = Long * 0.62;
+        local Alpha = 0.55 - Near * 0.4;
+        local X, Turn = Between(-30, W), Between(0, 360);
+        local Side = EffectRandom:NextNumber() < 0.5 and -1 or 1;
+
+        local Holder = Instance.new('Frame');
+        Holder.BackgroundTransparency = 1;
+        Holder.Size = UDim2.new();
+        Holder.ZIndex = 2;
+        Holder.Parent = Layer;
+        Fx.Flow(Holder, 16 - Near * 8 + Between(0, 3),
+            { Position = UDim2.fromOffset(X, -14) }, { Position = UDim2.fromOffset(X + Between(20, 70), H + 14) });
+
+        local Petal = Fx.Piece(Holder, 0, 0, Long, Wide, Alpha, 'AccentColor', 1, Turn);
+        local Tip = Fx.Piece(Petal, 0, 0, 0, 0, Alpha, WHITE, 1); -- the pale end of the petal
+        Tip.Position, Tip.Size = UDim2.fromScale(0.5, 0.5), UDim2.fromScale(1, 1);
+        Library:Create('UIGradient', {
+            Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(0.7, 1), NumberSequenceKeypoint.new(1, 1) });
+            Parent = Tip;
+        });
+
+        Fx.Sway(Petal, Between(1.6, 3.2), { Position = UDim2.fromOffset(Between(10, 24) * Side, 0) });
+        Fx.Sway(Petal, Between(0.7, 1.5), { Size = UDim2.fromOffset(Long, 1) });
+        Fx.Flow(Petal, Between(5, 10), { Rotation = Turn }, { Rotation = Turn + 360 * Side });
+    end;
+end;
+
+Library.BackgroundEffects.Snow = function(Layer, W, H)
+    local WHITE = Color3.new(1, 1, 1);
+
+    for _ = 1, math.clamp(math.floor(W / 9), 24, 70) do
+        local X, Size = Between(4, W - 4), EffectRandom:NextInteger(2, 4);
+        local Flake = Fx.Piece(Layer, X, 0, Size, Size, 0.35 + (4 - Size) * 0.2 + Between(0, 0.15), WHITE, 1);
+        Fx.Flow(Flake, 14 - Size * 2 + Between(0, 3), -- larger flakes are nearer: they fall faster
+            { Position = UDim2.fromOffset(X, -4) }, { Position = UDim2.fromOffset(X + Between(-25, 25), H + 4) });
+    end;
+end;
+
+Library.BackgroundEffects.Glow = function(Layer, W, H)
+    -- two soft bands as wide as the window (a narrower blob showed its hard side edges), drifting up and down
+    local Top = Fx.Band(Layer, W / 2, H * 0.2, W, H * 0.6, 'AccentColor', 90, { { 0, 0.6 }, { 1, 1 } });
+    local Low = Fx.Band(Layer, W / 2, H * 0.85, W, H * 0.6, 'AccentColor', 90, { { 0, 1 }, { 1, 0.62 } });
+    Fx.Sway(Top, 9, { Position = UDim2.fromOffset(W / 2, H * 0.05) });
+    Fx.Sway(Low, 11, { Position = UDim2.fromOffset(W / 2, H * 0.98) });
+end;
+
+Library.BackgroundEffects.Scanlines = function(Layer, W, H)
+    local BLACK = Color3.new(0, 0, 0);
+
+    for Y = 0, H, 4 do
+        Fx.Piece(Layer, W / 2, Y, W, 1, 0.7, BLACK, false);
+    end;
+
+    local Beam = Fx.Band(Layer, W / 2, 0, W, 50, 'AccentColor', 90, { { 0, 1 }, { 0.5, 0.8 }, { 1, 1 } });
+    Fx.Flow(Beam, 6, { Position = UDim2.fromOffset(W / 2, -30) }, { Position = UDim2.fromOffset(W / 2, H + 30) });
+end;
+
+local function ClearBackgroundEffect()
+    local Tweens = EffectTweens;
+    EffectTweens, EffectPieces = {}, {};
+
+    for _, Tween in next, Tweens do
+        Tween:Cancel();
+    end;
+
+    if Library.EffectLayer then
+        Library.EffectLayer:ClearAllChildren();
+    end;
+end;
+
+-- The layer's size in its own (unscaled) pixels: the menu's zoom and the UI scale do not count as a new size.
+local function EffectLayerSize()
+    local Layer = Library.EffectLayer;
+    local Scale = ParentScaleOf(Layer);
+    return math.floor(Layer.AbsoluteSize.X / Scale + 0.5), math.floor(Layer.AbsoluteSize.Y / Scale + 0.5);
+end;
+
+local function BuildBackgroundEffect()
+    ClearBackgroundEffect();
+    EffectBuilt.W, EffectBuilt.H = 0, 0;
+
+    local Layer = Library.EffectLayer;
+    local Build = Library.BackgroundEffectsOn and Library.BackgroundEffects[Library.BackgroundEffect];
+
+    if not (Layer and Build) then
+        return;
+    end;
+
+    local W, H = EffectLayerSize();
+
+    if W < 50 or H < 50 then
+        return; -- not laid out yet: the layer's size signal builds it
+    end;
+
+    EffectBuilt.W, EffectBuilt.H = W, H;
+    Build(Layer, W, H);
+
+    if not Layer.Parent.Visible then
+        Library:RunBackgroundEffect(false);
+    end;
+end;
+
+function Library:SetBackgroundEffect(Name)
+    if Library:NeedsUIThread() then
+        return Library:RunOnUIThread(Library.SetBackgroundEffect, Library, Name);
+    end;
+
+    Library.BackgroundEffect = Name;
+    BuildBackgroundEffect();
+end;
+
+function Library:SetBackgroundEffects(Enabled)
+    Library.BackgroundEffectsOn = Enabled and true or false;
+    Library:SetBackgroundEffect(Library.BackgroundEffect);
+end;
+
+-- Pauses the loops while the menu is hidden, and picks them up where they stopped.
+function Library:RunBackgroundEffect(Running)
+    for _, Tween in next, EffectTweens do
+        if Running then
+            Tween:Play();
+        else
+            Tween:Pause();
+        end;
+    end;
+end;
+
+function Library:PaintBackgroundEffect()
+    for _, Piece in next, EffectPieces do
+        Piece[1].BackgroundColor3 = Library[Piece[2]];
+    end;
+end;
+
+-- The window calls this once with its effect layer.
+local function WatchEffectLayer(Layer)
+    Library.EffectLayer = Layer;
+
+    local Waiting = false;
+
+    Layer:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+        if Waiting then
+            return;
+        end;
+
+        Waiting = true;
+
+        task.delay(0.3, function()
+            Waiting = false;
+
+            if not Layer.Parent then
+                return;
+            end;
+
+            local W, H = EffectLayerSize();
+
+            if math.abs(W - EffectBuilt.W) > 2 or math.abs(H - EffectBuilt.H) > 2 then
+                BuildBackgroundEffect(); -- resized: an effect is laid out for the size it was built at
+            end;
+        end);
+    end);
+
+    Library:GiveSignal({ Disconnect = ClearBackgroundEffect });
+    BuildBackgroundEffect();
+end;
+
 function Library:CreateWindow(...)
     local Arguments = { ... }
     local Config = { AnchorPoint = Vector2.zero }
@@ -6997,6 +7527,18 @@ function Library:CreateWindow(...)
         ZIndex = 1;
         Parent = Outer;
     });
+
+    if not Library.EffectLayer then
+        WatchEffectLayer(Library:Create('Frame', {
+            Name = 'BackgroundEffect';
+            BackgroundTransparency = 1;
+            ClipsDescendants = true;
+            Position = UDim2.fromOffset(1, 1);
+            Size = UDim2.new(1, -2, 1, -2);
+            ZIndex = 2;
+            Parent = Outer;
+        }));
+    end;
 
     Library:AddToRegistry(Inner, {
         BackgroundColor3 = 'MainColor';
@@ -8487,6 +9029,7 @@ function Library:CreateWindow(...)
         Library.Toggled = Toggled;
         Library:UpdateFloatingSections();
         if Library.LayoutLoaded then Library:SaveLayout(); end;
+        if Toggled then Library:RunBackgroundEffect(true); end;
 
         ToggleGeneration = ToggleGeneration + 1;
         local Generation = ToggleGeneration;
@@ -8599,6 +9142,7 @@ function Library:CreateWindow(...)
 
             Outer.Visible = Toggled;
             Window.Fading = false;
+            if not Toggled then Library:RunBackgroundEffect(false); end;
 
             if Toggled then
                 table.clear(Faded); -- faded in: everything shows its real values again
@@ -8687,6 +9231,7 @@ local ThemeManager = {} do
 	-- if not isfolder(ThemeManager.Folder) then makefolder(ThemeManager.Folder) end
 
 	ThemeManager.Library = nil
+	-- { order in the list, colors, background effect (a Library.BackgroundEffects key) or nothing }
 	ThemeManager.BuiltInThemes = {
 		['Default'] 		= { 1, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"1c1c1c","AccentColor":"0055ff","BackgroundColor":"141414","OutlineColor":"323232"}') },
 		['BBot'] 			= { 2, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"1e1e1e","AccentColor":"7e48a3","BackgroundColor":"232323","OutlineColor":"141414"}') },
@@ -8696,22 +9241,22 @@ local ThemeManager = {} do
 		['Tokyo Night'] 	= { 6, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"191925","AccentColor":"6759b3","BackgroundColor":"16161f","OutlineColor":"323232"}') },
 		['Ubuntu'] 			= { 7, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"3e3e3e","AccentColor":"e2581e","BackgroundColor":"323232","OutlineColor":"191919"}') },
 		['Quartz'] 			= { 8, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"232330","AccentColor":"426e87","BackgroundColor":"1d1b26","OutlineColor":"27232f"}') },
-		['Sakura'] = { 9, httpService:JSONDecode('{"FontColor":"fff0f6","MainColor":"2a1f2b","AccentColor":"ff8fb8","BackgroundColor":"211822","OutlineColor":"4a3346"}') },
-		['Midnight Ocean'] = { 10, httpService:JSONDecode('{"FontColor":"e6f4ff","MainColor":"101a2b","AccentColor":"38bdf8","BackgroundColor":"0b1322","OutlineColor":"1f3350"}') },
-		['Aurora'] = { 11, httpService:JSONDecode('{"FontColor":"eafffb","MainColor":"14201f","AccentColor":"5eead4","BackgroundColor":"0f1918","OutlineColor":"25403c"}') },
+		['Sakura'] = { 9, httpService:JSONDecode('{"FontColor":"fff0f6","MainColor":"2a1f2b","AccentColor":"ff8fb8","BackgroundColor":"211822","OutlineColor":"4a3346"}'), 'Petals' },
+		['Midnight Ocean'] = { 10, httpService:JSONDecode('{"FontColor":"e6f4ff","MainColor":"101a2b","AccentColor":"38bdf8","BackgroundColor":"0b1322","OutlineColor":"1f3350"}'), 'Stars' },
+		['Aurora'] = { 11, httpService:JSONDecode('{"FontColor":"eafffb","MainColor":"14201f","AccentColor":"5eead4","BackgroundColor":"0f1918","OutlineColor":"25403c"}'), 'Glow' },
 		['Dracula'] = { 12, httpService:JSONDecode('{"FontColor":"f8f8f2","MainColor":"282a36","AccentColor":"bd93f9","BackgroundColor":"21222c","OutlineColor":"44475a"}') },
-		['Nord'] = { 13, httpService:JSONDecode('{"FontColor":"eceff4","MainColor":"2e3440","AccentColor":"88c0d0","BackgroundColor":"272c36","OutlineColor":"434c5e"}') },
+		['Nord'] = { 13, httpService:JSONDecode('{"FontColor":"eceff4","MainColor":"2e3440","AccentColor":"88c0d0","BackgroundColor":"272c36","OutlineColor":"434c5e"}'), 'Snow' },
 		['Catppuccin'] = { 14, httpService:JSONDecode('{"FontColor":"cdd6f4","MainColor":"1e1e2e","AccentColor":"cba6f7","BackgroundColor":"181825","OutlineColor":"313244"}') },
 		['Gruvbox'] = { 15, httpService:JSONDecode('{"FontColor":"ebdbb2","MainColor":"282828","AccentColor":"fe8019","BackgroundColor":"1d2021","OutlineColor":"504945"}') },
-		['Cyberpunk'] = { 16, httpService:JSONDecode('{"FontColor":"e0fbfc","MainColor":"14121f","AccentColor":"fcee0a","BackgroundColor":"0d0b16","OutlineColor":"2e2a45"}') },
+		['Cyberpunk'] = { 16, httpService:JSONDecode('{"FontColor":"e0fbfc","MainColor":"14121f","AccentColor":"fcee0a","BackgroundColor":"0d0b16","OutlineColor":"2e2a45"}'), 'Scanlines' },
 		['Rose Gold'] = { 17, httpService:JSONDecode('{"FontColor":"fff5f2","MainColor":"2b2224","AccentColor":"e8a598","BackgroundColor":"221b1c","OutlineColor":"4a3a3c"}') },
 		['Royal Gold'] = { 18, httpService:JSONDecode('{"FontColor":"fff8e1","MainColor":"1a1a14","AccentColor":"d4af37","BackgroundColor":"141410","OutlineColor":"3a3626"}') },
 		['VS Code'] = { 19, httpService:JSONDecode('{"FontColor":"cccccc","MainColor":"1f1f1f","AccentColor":"0078d4","BackgroundColor":"181818","OutlineColor":"2b2b2b"}') },
-		['Everforest'] = { 20, httpService:JSONDecode('{"FontColor":"d3c6aa","MainColor":"2d353b","AccentColor":"a7c080","BackgroundColor":"232a2e","OutlineColor":"475258"}') },
-		['Kanagawa'] = { 21, httpService:JSONDecode('{"FontColor":"dcd7ba","MainColor":"1f1f28","AccentColor":"7e9cd8","BackgroundColor":"16161d","OutlineColor":"363646"}') },
-		['Sunset'] = { 22, httpService:JSONDecode('{"FontColor":"ffeee6","MainColor":"221c35","AccentColor":"ff7a59","BackgroundColor":"1a152b","OutlineColor":"3d3358"}') },
-		['Crimson'] = { 23, httpService:JSONDecode('{"FontColor":"f5e6e6","MainColor":"1d1416","AccentColor":"e5484d","BackgroundColor":"151011","OutlineColor":"3d262a"}') },
-		['Solarized'] = { 24, httpService:JSONDecode('{"FontColor":"eee8d5","MainColor":"073642","AccentColor":"b58900","BackgroundColor":"002b36","OutlineColor":"0f4b5a"}') },
+		['Everforest'] = { 20, httpService:JSONDecode('{"FontColor":"d3c6aa","MainColor":"2d353b","AccentColor":"a7c080","BackgroundColor":"232a2e","OutlineColor":"475258"}'), 'Fireflies' },
+		['Kanagawa'] = { 21, httpService:JSONDecode('{"FontColor":"dcd7ba","MainColor":"1f1f28","AccentColor":"7e9cd8","BackgroundColor":"16161d","OutlineColor":"363646"}'), 'Waves' },
+		['Sunset'] = { 22, httpService:JSONDecode('{"FontColor":"ffeee6","MainColor":"221c35","AccentColor":"ff7a59","BackgroundColor":"1a152b","OutlineColor":"3d3358"}'), 'Sun' },
+		['Crimson'] = { 23, httpService:JSONDecode('{"FontColor":"f5e6e6","MainColor":"1d1416","AccentColor":"e5484d","BackgroundColor":"151011","OutlineColor":"3d262a"}'), 'Embers' },
+		['Solarized'] = { 24, httpService:JSONDecode('{"FontColor":"eee8d5","MainColor":"073642","AccentColor":"b58900","BackgroundColor":"002b36","OutlineColor":"0f4b5a"}'), 'Grid' },
 	}
 
 	function ThemeManager:ApplyTheme(theme)
@@ -8732,6 +9277,7 @@ local ThemeManager = {} do
 		end
 
 		self:ThemeUpdate()
+		self.Library:SetBackgroundEffect(not customThemeData and data[3] or nil) -- custom themes have none
 	end
 
 	function ThemeManager:ThemeUpdate()
@@ -8973,7 +9519,7 @@ local ThemeManager = {} do
 
 		MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
 		MenuGroup:AddSlider('UIScale', { Text = 'UI scale', Default = 1, Min = 0.5, Max = 2, Rounding = 2, Suffix = 'x', HideMax = true, Tooltip = 'Size of the menu and its popups' })
-		MotionGroup:AddToggle('UIAnimations', { Text = 'Animations', Default = true, Tooltip = 'Eased fades, slides and hovers. Off: everything changes instantly', Callback = function(Value) Library.Animations = Value end })
+		MotionGroup:AddToggle('UIAnimations', { Text = 'Animations', Default = true, Tooltip = 'Eased fades, slides and hovers. Off: everything changes instantly', Callback = function(Value) Library.Animations = Value; Library:SetBackgroundEffect(Library.BackgroundEffect) end })
 		MotionGroup:AddToggle('LightDrag', { Text = 'Light drag', Default = true, Tooltip = 'Drag the menu as an outline and move it on release: no FPS drop while dragging. Off: the menu follows the cursor', Callback = function(Value) Library.LightDrag = Value end })
 		MotionGroup:AddSlider('MenuFadeTime', { Text = 'Open / close fade time', Default = 0.25, Min = 0, Max = 1, Rounding = 2, Suffix = 's', HideMax = true })
 		if GlassGroup then
@@ -8989,6 +9535,7 @@ local ThemeManager = {} do
 		LookGroup:AddSlider('CursorSize', { Text = 'Cursor size', Default = 24, Min = 8, Max = 64, Rounding = 0, Suffix = 'px', HideMax = true })
 		Options.CursorImage:OnChanged(function(Value) Library:SetCursor(Value) end)
 		Options.CursorSize:OnChanged(function(Value) Library:SetCursor(nil, Value) end)
+		LookGroup:AddToggle('ThemeEffect', { Text = 'Theme background effect', Default = true, Tooltip = 'The moving background some themes come with (fireflies, waves, embers, snow...). Off for the plain menu and a little more FPS', Callback = function(Value) Library:SetBackgroundEffects(Value) end })
 		LookGroup:AddToggle('WindowGlow', { Text = 'Window glow', Default = false, Tooltip = 'Soft accent-colored glow around the menu' })
 		local GlowBox = LookGroup:AddDependencyBox()
 		GlowBox:AddSlider('GlowSize', { Text = 'Glow size', Default = 30, Min = 5, Max = 100, Rounding = 0, Suffix = 'px', HideMax = true })
@@ -9106,7 +9653,8 @@ local SaveManager = {} do
 		},
 		Slider = {
 			Save = function(idx, object)
-				return { type = 'Slider', idx = idx, value = tostring(object.Value) }
+				-- a Range slider's { low, high } is saved as 'low,high'
+				return { type = 'Slider', idx = idx, value = type(object.Value) == 'table' and table.concat(object.Value, ',') or tostring(object.Value) }
 			end,
 			Load = function(idx, data)
 				if Options[idx] then 
