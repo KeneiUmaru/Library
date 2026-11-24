@@ -57,7 +57,8 @@
                                                   -- saved to Library.LayoutFile (SaveManager:SetFolder sets it,
                                                   -- SaveManager:LoadAutoloadConfig loads it); it also keeps whether the
                                                   -- menu was open: LoadLayout reopens or hides it that way
-                                                  -- (Library.SavedOpen = that value, nil for an older file)
+                                                  -- (Library.SavedOpen = that value, nil for an older file), the
+                                                  -- tab that was showing and how far each tab's columns were scrolled
         Library.Animations = true                 -- eased toggles, sliders, hovers, dropdowns, tab switch, folding, button
                                                   -- flash, notifications and the menu fade; false snaps them (Settings >
                                                   -- Menu > Animations). Library:Animate(inst, time, goal) / :CreateTween
@@ -211,7 +212,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 21;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 22;         -- bump when the public API changes; clients check this against the GitHub copy
                           -- 14: AddSlider Info.Format(Value) -> display text
                           -- 15: AddDropdown Info.ValueIcons
                           -- 16: Groupbox:AddIconLabel
@@ -6471,6 +6472,54 @@ function Library:UpdateFloatingSections()
     end;
 end;
 
+-- Every tab of every window: { Name, Tab, Window, Left, Right } (Window:AddTab adds, Window:Destroy removes).
+-- The layout keeps which one was showing and how far its two columns were scrolled.
+-- shortcut: tabs are told apart by name, so two windows with a tab of the same name share one entry in the file.
+local LayoutTabs = {};
+local ScrollRestoring, LayoutSaveToken = 0, 0;
+
+-- Saves the layout half a second after the last call: scrolling asks once a frame.
+function Library:QueueLayoutSave()
+    if not Library.LayoutLoaded then
+        return;
+    end;
+
+    LayoutSaveToken = LayoutSaveToken + 1;
+    local Token = LayoutSaveToken;
+
+    task.delay(0.5, function()
+        -- an unloaded menu has no boxes left in its columns: saving it would write every box to the left side
+        if Token ~= LayoutSaveToken or not ScreenGui.Parent then
+            return;
+        end;
+        if ScrollRestoring > 0 then
+            return Library:QueueLayoutSave(); -- columns still on their way to the saved position
+        end;
+        Library:SaveLayout();
+    end);
+end;
+
+-- Y in unscaled pixels. A column's canvas takes its size a frame or more after its boxes were folded and docked;
+-- until then the position is cut off at the old size, so it is set again until it holds.
+local function RestoreScroll(Side, Y)
+    if not Y or Y < 1 then
+        return;
+    end;
+
+    ScrollRestoring = ScrollRestoring + 1;
+    task.spawn(function()
+        for _ = 1, 30 do
+            local Want = Y * math.max(Library.UIScale or 1, 0.01); -- CanvasPosition is in screen pixels
+            Side.CanvasPosition = Vector2.new(0, Want);
+            if math.abs(Side.CanvasPosition.Y - Want) < 1 or not Side.Parent then
+                break;
+            end;
+            RenderStepped:Wait();
+        end;
+        ScrollRestoring = ScrollRestoring - 1;
+    end);
+end;
+
 function Library:GetLayout()
     local Data = {};
 
@@ -6489,7 +6538,22 @@ function Library:GetLayout()
         Data[Section.Key] = Entry;
     end;
 
-    Data['@Menu'] = { Open = Library.Toggled };
+    local Menu = { Open = Library.Toggled };
+    local Scale = math.max(Library.UIScale or 1, 0.01);
+
+    for _, Entry in next, LayoutTabs do
+        if Entry.Window.ActiveTab == Entry.Tab then
+            Menu.Tab = Entry.Name;
+        end;
+
+        local Left, Right = Entry.Left.CanvasPosition.Y / Scale, Entry.Right.CanvasPosition.Y / Scale;
+        if Left >= 1 or Right >= 1 then
+            Menu.Scroll = Menu.Scroll or {};
+            Menu.Scroll[Entry.Name] = { math.floor(Left + 0.5), math.floor(Right + 0.5) };
+        end;
+    end;
+
+    Data['@Menu'] = Menu;
     return Data;
 end;
 
@@ -6520,6 +6584,23 @@ function Library:ApplyLayout(Data)
     if type(Menu) == 'table' and type(Menu.Open) == 'boolean' then Library.SavedOpen = Menu.Open; end;
     if Library.SavedOpen ~= nil and Library.SavedOpen ~= Library.Toggled then
         Library:Toggle(Library.SavedOpen);
+    end;
+
+    -- back on the tab that was showing, each tab scrolled to where it was left
+    if type(Menu) == 'table' then
+        local Scroll = type(Menu.Scroll) == 'table' and Menu.Scroll or {};
+
+        for _, Entry in next, LayoutTabs do
+            if Entry.Name == Menu.Tab and Entry.Window.ActiveTab ~= Entry.Tab then
+                Entry.Tab:ShowTab();
+            end;
+
+            local Saved = Scroll[Entry.Name];
+            if type(Saved) == 'table' then
+                RestoreScroll(Entry.Left, tonumber(Saved[1]));
+                RestoreScroll(Entry.Right, tonumber(Saved[2]));
+            end;
+        end;
     end;
 end;
 
@@ -6559,6 +6640,10 @@ function Library:ResetLayout()
         MoveSectionBox(Section, Section.DefaultSide == 2 and Section.Tab.RightSide or Section.Tab.LeftSide);
         Library:UpdateSectionButtons(Section);
         Library:SetSectionFolded(Section, Section.DefaultFolded == true);
+    end;
+
+    for _, Entry in next, LayoutTabs do
+        Entry.Left.CanvasPosition, Entry.Right.CanvasPosition = Vector2.zero, Vector2.zero;
     end;
 
     Library:SaveLayout();
@@ -8053,6 +8138,12 @@ function Library:CreateWindow(...)
     -- Removes this window, its sections and their floating panels. For scripts that rebuild their window on the
     -- same library (a re-run with the library kept), which otherwise stacks a new window on the old one.
     function Window:Destroy()
+        for Index = #LayoutTabs, 1, -1 do
+            if LayoutTabs[Index].Window == Window then
+                table.remove(LayoutTabs, Index);
+            end;
+        end;
+
         for Index = #Library.Sections, 1, -1 do
             local Section = Library.Sections[Index];
 
@@ -8208,8 +8299,13 @@ function Library:CreateWindow(...)
             end;
             Layout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(UpdateCanvas);
             Side:GetPropertyChangedSignal('AbsoluteSize'):Connect(UpdateCanvas);
+            Side:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
+                Library:QueueLayoutSave(); -- the layout keeps where each column was left
+            end);
             task.defer(UpdateCanvas);
         end;
+
+        table.insert(LayoutTabs, { Name = Name, Tab = Tab, Window = Window, Left = LeftSide, Right = RightSide });
 
         -- what a section needs to find its way back (see Library:RegisterSection)
         local SectionTab = { Name = Name, LeftSide = LeftSide, RightSide = RightSide, Frame = TabFrame, WindowOuter = Outer };
@@ -8280,6 +8376,10 @@ function Library:CreateWindow(...)
                 Library:RestoreTree(Tab.FadeRest);
                 Tab.FadeRest = nil;
                 TabFrame.Position = UDim2.new();
+            end;
+
+            if Previous ~= Tab then
+                Library:QueueLayoutSave(); -- the layout keeps which tab was showing
             end;
         end;
 
