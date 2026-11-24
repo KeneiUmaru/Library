@@ -32,6 +32,11 @@
         CreateWindow Version / Channel / Subtitle / TitleNote -- title bar as a header: Title on the left with Version
                                                   -- (accent) and Channel (green, e.g. 'BETA') as badges, Subtitle
                                                   -- centred, TitleNote (an invite, a status) on the right
+        Groupbox:AddParagraph({ Title, Text, Image, ImageHeight }) -- help text: a title over a dimmer, wrapped body.
+                                                  -- Image (rbxassetid / rbxthumb, an id number, or with getcustomasset
+                                                  -- a URL or workspace file) adds a banner on top, cropped to
+                                                  -- ImageHeight px (72), the title over its lower edge.
+                                                  -- :SetTitle(s), :SetText(s), :SetImage(source or nil)
         Library:Modal({ Title, Text, Buttons = { 'Delete', 'Cancel' } }) -- dialog over the dimmed window; yields and
                                                   -- returns the picked button's text. The first button is the accent
                                                   -- one, on the right
@@ -201,7 +206,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 18;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 19;         -- bump when the public API changes; clients check this against the GitHub copy
                           -- 14: AddSlider Info.Format(Value) -> display text
                           -- 15: AddDropdown Info.ValueIcons
                           -- 16: Groupbox:AddIconLabel
@@ -1016,6 +1021,12 @@ function Library:MapValue(Value, MinA, MaxA, MinB, MaxB)
     return (1 - ((Value - MinA) / (MaxA - MinA))) * MinB + ((Value - MinA) / (MaxA - MinA)) * MaxB;
 end;
 
+-- Extra height for a wrapped label sized to its measured text. While a UIScale eases to its end value (the menu's
+-- and a dialog's zoom) Roblox lays the lines out in a box a fraction of a pixel short of them and drops the last
+-- line, then keeps that layout: the box reaches its full size without changing by a whole pixel. Live: last line
+-- missing after 9 of 10 menu opens, none with 1 px to spare.
+local WRAP_SLACK = 1;
+
 function Library:GetTextBounds(Text, Font, Size, Resolution)
     local Bounds = TextService:GetTextSize(Text, Size, Font, Resolution or Vector2.new(1920, 1080))
     return Bounds.X, Bounds.Y
@@ -1676,6 +1687,39 @@ local function CurToPng(Data)
     return Best.Png, Best.Hot;
 end;
 
+-- An image source as something an ImageLabel can show: rbxasset / rbxthumb ids as they are, a URL (downloaded once)
+-- or a workspace file through getcustomasset. A .cur also returns its hotspot. Errors when it cannot be loaded;
+-- a URL yields while it downloads. (The folder is named for its first user, the cursor.)
+local function ResolveImage(Source)
+    if Source:find('^rbxasset') or Source:find('^rbxthumb') then
+        return Source;
+    end;
+
+    assert(GetCustomAsset, 'this executor has no getcustomasset');
+    local Path = Source;
+
+    if Source:find('^https?://') then
+        Path = 'LinoriaCursors/' .. (Source:gsub('[^%w%.]', '_'):sub(-80));
+
+        if not isfile(Path) then
+            if not isfolder('LinoriaCursors') then
+                makefolder('LinoriaCursors');
+            end;
+
+            writefile(Path, game:HttpGet(Source));
+        end;
+    end;
+
+    if Path:lower():find('%.cur$') then
+        local Png, Hot = CurToPng(readfile(Path));
+        local PngPath = Path:sub(1, -5) .. '.png';
+        writefile(PngPath, Png);
+        return GetCustomAsset(PngPath), Hot;
+    end;
+
+    return GetCustomAsset(Path);
+end;
+
 function Library:SetCursor(Source, Size)
     if Library:NeedsUIThread() then
         return Library:RunOnUIThread(Library.SetCursor, Library, Source, Size);
@@ -1688,33 +1732,9 @@ function Library:SetCursor(Source, Size)
         local Ok, Asset, Hotspot = pcall(function()
             if Source == '' then
                 return nil;
-            elseif Source:find('^rbxasset') or Source:find('^rbxthumb') then
-                return Source;
             end;
 
-            assert(GetCustomAsset, 'this executor has no getcustomasset');
-            local Path = Source;
-
-            if Source:find('^https?://') then
-                Path = 'LinoriaCursors/' .. (Source:gsub('[^%w%.]', '_'):sub(-80));
-
-                if not isfile(Path) then
-                    if not isfolder('LinoriaCursors') then
-                        makefolder('LinoriaCursors');
-                    end;
-
-                    writefile(Path, game:HttpGet(Source));
-                end;
-            end;
-
-            if Path:lower():find('%.cur$') then
-                local Png, Hot = CurToPng(readfile(Path));
-                local PngPath = Path:sub(1, -5) .. '.png';
-                writefile(PngPath, Png);
-                return GetCustomAsset(PngPath), Hot;
-            end;
-
-            return GetCustomAsset(Path);
+            return ResolveImage(Source);
         end);
 
         if not Ok then
@@ -2754,8 +2774,9 @@ do
         });
 
         if DoesWrap then
+            -- + WRAP_SLACK, taken back from the blank under it: see WRAP_SLACK
             local Y = select(2, Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(TextLabel.AbsoluteSize.X, math.huge)))
-            TextLabel.Size = UDim2.new(1, -4, 0, Y)
+            TextLabel.Size = UDim2.new(1, -4, 0, Y + WRAP_SLACK)
         else
             Library:Create('UIListLayout', {
                 Padding = UDim.new(0, 4);
@@ -2789,7 +2810,7 @@ do
 
             if DoesWrap then
                 local Y = select(2, Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(TextLabel.AbsoluteSize.X, math.huge)))
-                TextLabel.Size = UDim2.new(1, -4, 0, Y)
+                TextLabel.Size = UDim2.new(1, -4, 0, Y + WRAP_SLACK)
             end
 
             Groupbox:Resize();
@@ -2799,7 +2820,7 @@ do
             setmetatable(Label, BaseAddons);
         end
 
-        Groupbox:AddBlank(5);
+        Groupbox:AddBlank(DoesWrap and 5 - WRAP_SLACK or 5);
         Groupbox:Resize();
 
         return Label;
@@ -2882,7 +2903,7 @@ do
             end;
 
             Object.Text = table.concat(Lines, '\n');
-            Object.Size = UDim2.new(1, -4, 0, Y);
+            Object.Size = UDim2.new(1, -4, 0, Y + WRAP_SLACK);
             Groupbox:Resize();
         end;
 
@@ -3202,6 +3223,177 @@ do
         Groupbox:Resize();
 
         return Button;
+    end;
+
+    -- A block of help text: a title over a dimmer, wrapped body. Info = { Title, Text (or Content), Image, ImageHeight };
+    -- a plain string is the body. With Image a banner comes first, cropped to fill ImageHeight px (default 72), with
+    -- the title over its lower edge. Image: an rbxassetid / rbxthumb string, an asset id number, or (getcustomasset)
+    -- an image URL or a workspace file path; a URL is downloaded once in the background and the banner appears when
+    -- it is there. The body is wrapped again when the section's width changes. Paragraph:SetTitle(s), :SetText(s),
+    -- :SetImage(source or nil) are safe from game callbacks.
+    function Funcs:AddParagraph(Info)
+        if type(Info) ~= 'table' then Info = { Text = Info }; end;
+
+        local Groupbox = self;
+        local Paragraph = { Title = Info.Title, Text = Info.Text or Info.Content, Image = Info.Image };
+        local ImageHeight = tonumber(Info.ImageHeight) or 72;
+
+        local Holder = Library:Create('Frame', {
+            BackgroundTransparency = 1;
+            Size = UDim2.new(1, -4, 0, 0);
+            ZIndex = 5;
+            Parent = Groupbox.Container;
+        });
+
+        local Banner = Library:Create('Frame', {
+            BackgroundColor3 = Library.MainColor;
+            BorderSizePixel = 0;
+            Size = UDim2.new(1, 0, 0, ImageHeight);
+            Visible = false;
+            ZIndex = 6;
+            Parent = Holder;
+        });
+        local BannerStroke = Library:Create('UIStroke', {
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+            Color = Library.OutlineColor;
+            Parent = Banner;
+        });
+        Library:AddToRegistry(Banner, { BackgroundColor3 = 'MainColor' });
+        Library:AddToRegistry(BannerStroke, { Color = 'OutlineColor' });
+
+        local Picture = Library:Create('ImageLabel', {
+            BackgroundTransparency = 1;
+            ScaleType = Enum.ScaleType.Crop;
+            Size = UDim2.fromScale(1, 1);
+            ZIndex = 7;
+            Parent = Banner;
+        });
+
+        -- darkens the lower half of the picture so the title over it stays readable
+        local Shade = Library:Create('Frame', {
+            BackgroundColor3 = Color3.new(0, 0, 0);
+            BorderSizePixel = 0;
+            Size = UDim2.fromScale(1, 1);
+            ZIndex = 8;
+            Parent = Banner;
+        });
+        Library:Create('UIGradient', {
+            Rotation = 90;
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.45, 1), NumberSequenceKeypoint.new(1, 0.15),
+            });
+            Parent = Shade;
+        });
+
+        for _, Rounded in next, { Banner, Picture, Shade } do
+            Library:Create('UICorner', { CornerRadius = UDim.new(0, 4); Parent = Rounded });
+        end;
+
+        local Title = Library:CreateLabel({
+            TextSize = 14;
+            TextTruncate = Enum.TextTruncate.AtEnd;
+            TextXAlignment = Enum.TextXAlignment.Left;
+            ZIndex = 9;
+            Parent = Holder;
+        });
+
+        local Body = Library:CreateLabel({
+            TextSize = 14;
+            TextTransparency = 0.35; -- under the title in weight
+            TextWrapped = true;
+            TextXAlignment = Enum.TextXAlignment.Left;
+            TextYAlignment = Enum.TextYAlignment.Top;
+            ZIndex = 6;
+            Parent = Holder;
+        });
+
+        -- unscaled, so the menu's zoom and the UI scale do not count as a new width
+        local function InnerWidth()
+            return math.floor(Holder.AbsoluteSize.X / ParentScaleOf(Holder) + 0.5);
+        end;
+
+        local Width, Asset;
+
+        local function Layout()
+            local HasImage = Asset ~= nil;
+            local HasTitle = Paragraph.Title ~= nil and Paragraph.Title ~= '';
+            local HasText = Paragraph.Text ~= nil and Paragraph.Text ~= '';
+            local Y = 0;
+
+            Banner.Visible = HasImage;
+            Shade.Visible = HasTitle;
+            Title.Visible = HasTitle;
+            Title.Text = HasTitle and tostring(Paragraph.Title) or '';
+
+            if HasImage then
+                Picture.Image = Asset;
+                Title.Position, Title.Size, Title.TextSize = UDim2.fromOffset(8, ImageHeight - 22), UDim2.new(1, -16, 0, 16), 15;
+                Y = ImageHeight + (HasText and 6 or 0);
+            elseif HasTitle then
+                Title.Position, Title.Size, Title.TextSize = UDim2.new(), UDim2.new(1, 0, 0, 15), 14;
+                Y = 15 + (HasText and 3 or 0);
+            end;
+
+            Width = InnerWidth();
+            Body.Visible = HasText;
+
+            if HasText then
+                local Text = tostring(Paragraph.Text);
+                local Height = select(2, Library:GetTextBounds(Text, Library.Font, 14, Vector2.new(math.max(Width, 1), math.huge)));
+                Body.Text = Text;
+                Body.Position = UDim2.fromOffset(0, Y);
+                Body.Size = UDim2.new(1, 0, 0, Height + WRAP_SLACK); -- overhangs the holder: see WRAP_SLACK
+                Y = Y + Height;
+            end;
+
+            Holder.Size = UDim2.new(1, -4, 0, Y);
+            Groupbox:Resize();
+        end;
+
+        Holder:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+            if InnerWidth() ~= Width then Layout(); end;
+        end);
+
+        -- sets Asset from Paragraph.Image; a URL or file is loaded off this thread and laid out when it is there
+        local function LoadImage()
+            local Source = Paragraph.Image;
+            Asset = nil;
+
+            if type(Source) == 'number' then
+                Asset = 'rbxassetid://' .. Source;
+            elseif type(Source) == 'string' and Source:find('^rbx') then
+                Asset = Source;
+            elseif type(Source) == 'string' and Source ~= '' then
+                task.spawn(function()
+                    local Ok, Result = pcall(ResolveImage, Source);
+                    if Paragraph.Image ~= Source then return; end; -- changed while it downloaded
+
+                    if Ok then
+                        Asset = Result;
+                        Library:RunOnUIThread(Layout);
+                    else
+                        Library:Notify('Paragraph image failed: ' .. tostring(Result), 4);
+                    end;
+                end);
+            end;
+        end;
+
+        for _, Key in next, { 'Title', 'Text', 'Image' } do
+            Paragraph['Set' .. Key] = function(_, Value)
+                if Paragraph[Key] == Value then return; end;
+                Paragraph[Key] = Value;
+                if Key == 'Image' then LoadImage(); end;
+                Library:RunOnUIThread(Layout);
+            end;
+        end;
+
+        Paragraph.Holder = Holder;
+        LoadImage();
+        Layout();
+        Groupbox:AddBlank(8); -- a wrapped block reads as part of the next control at a label's 5 px
+        Groupbox:Resize();
+
+        return Paragraph;
     end;
 
     function Funcs:AddDivider()
@@ -5524,7 +5716,7 @@ function Library:Modal(Info)
 
     Library:CreateLabel({
         Position = UDim2.fromOffset(PAD, PAD + TITLE_HEIGHT + 8);
-        Size = UDim2.new(1, -PAD * 2, 0, TextHeight);
+        Size = UDim2.new(1, -PAD * 2, 0, TextHeight + WRAP_SLACK);
         Text = Text;
         TextSize = 14;
         TextTransparency = 0.25; -- under the title in weight
@@ -5606,7 +5798,7 @@ function Library:ChangeLog(Info)
     local Content = Library:Create('Frame', {
         BackgroundTransparency = 1;
         Position = UDim2.fromOffset(0, TOP);
-        Size = UDim2.new(1, 0, 0, TEXT_TOP + TextHeight);
+        Size = UDim2.new(1, 0, 0, TEXT_TOP + TextHeight + WRAP_SLACK);
         ZIndex = 303;
         Parent = Frame;
     });
@@ -5674,7 +5866,7 @@ function Library:ChangeLog(Info)
 
     local Body = Library:CreateLabel({
         Position = UDim2.fromOffset(PAD, TEXT_TOP);
-        Size = UDim2.new(1, -PAD * 2, 0, TextHeight);
+        Size = UDim2.new(1, -PAD * 2, 0, TextHeight + WRAP_SLACK);
         TextSize = 14;
         TextTransparency = 0.25;
         TextWrapped = true;
