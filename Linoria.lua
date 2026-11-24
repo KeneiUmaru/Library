@@ -8707,6 +8707,11 @@ local ThemeManager = {} do
 		['Rose Gold'] = { 17, httpService:JSONDecode('{"FontColor":"fff5f2","MainColor":"2b2224","AccentColor":"e8a598","BackgroundColor":"221b1c","OutlineColor":"4a3a3c"}') },
 		['Royal Gold'] = { 18, httpService:JSONDecode('{"FontColor":"fff8e1","MainColor":"1a1a14","AccentColor":"d4af37","BackgroundColor":"141410","OutlineColor":"3a3626"}') },
 		['VS Code'] = { 19, httpService:JSONDecode('{"FontColor":"cccccc","MainColor":"1f1f1f","AccentColor":"0078d4","BackgroundColor":"181818","OutlineColor":"2b2b2b"}') },
+		['Everforest'] = { 20, httpService:JSONDecode('{"FontColor":"d3c6aa","MainColor":"2d353b","AccentColor":"a7c080","BackgroundColor":"232a2e","OutlineColor":"475258"}') },
+		['Kanagawa'] = { 21, httpService:JSONDecode('{"FontColor":"dcd7ba","MainColor":"1f1f28","AccentColor":"7e9cd8","BackgroundColor":"16161d","OutlineColor":"363646"}') },
+		['Sunset'] = { 22, httpService:JSONDecode('{"FontColor":"ffeee6","MainColor":"221c35","AccentColor":"ff7a59","BackgroundColor":"1a152b","OutlineColor":"3d3358"}') },
+		['Crimson'] = { 23, httpService:JSONDecode('{"FontColor":"f5e6e6","MainColor":"1d1416","AccentColor":"e5484d","BackgroundColor":"151011","OutlineColor":"3d262a"}') },
+		['Solarized'] = { 24, httpService:JSONDecode('{"FontColor":"eee8d5","MainColor":"073642","AccentColor":"b58900","BackgroundColor":"002b36","OutlineColor":"0f4b5a"}') },
 	}
 
 	function ThemeManager:ApplyTheme(theme)
