@@ -8182,9 +8182,13 @@ function Library:CreateWindow(...)
 
         -- VS Code style tab: a box with a divider on its right and the name dimmed while inactive. The active one takes
         -- the content's shade, loses its bottom line and gets the rounded outline (Window:MoveUnderline).
-        local TabButton = Library:Create('Frame', {
+        -- A button, not a frame: Activated is Roblox's own click/tap, which also fires for a tap inside the sideways
+        -- scrolling strip. InputBegan + IsTap missed those on an Android emulator (MuMu: the tabs did not switch).
+        local TabButton = Library:Create('TextButton', {
             BackgroundTransparency = 1; -- the bar's shades are on the outline pieces (TabOutline), under the name
             BorderSizePixel = 0;
+            Text = '';
+            AutoButtonColor = false;
             Size = UDim2.new(0, TabButtonWidth + TAB_PADDING * 2, 1, 0);
             ZIndex = 1;
             Parent = TabArea;
@@ -8937,10 +8941,9 @@ function Library:CreateWindow(...)
             return Tab:AddTabbox({ Name = Name, Side = 2; });
         end;
 
-        TabButton.InputBegan:Connect(function(Input)
-            if IsTap(Input) then
-                Tab:ShowTab();
-            end;
+        -- fires on release (mouse too) and not after a swipe that scrolled the strip
+        TabButton.Activated:Connect(function()
+            Tab:ShowTab();
         end);
 
         -- This was the first tab added, so we show it by default.
