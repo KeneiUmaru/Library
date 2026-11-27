@@ -58,7 +58,8 @@
                                                   -- SaveManager:LoadAutoloadConfig loads it); it also keeps whether the
                                                   -- menu was open: LoadLayout reopens or hides it that way
                                                   -- (Library.SavedOpen = that value, nil for an older file), the
-                                                  -- tab that was showing and how far each tab's columns were scrolled
+                                                  -- tab that was showing, how far each tab's columns were scrolled
+                                                  -- and which sub-tab each tabbox was on
         Library.Animations = true                 -- eased toggles, sliders, hovers, dropdowns, tab switch, folding, button
                                                   -- flash, notifications and the menu fade; false snaps them (Settings >
                                                   -- Menu > Animations). Library:Animate(inst, time, goal) / :CreateTween
@@ -212,7 +213,7 @@ local Library = {
     ScreenGui = ScreenGui;
     PanelGuis = PanelGuis;
 
-    Version = 22;         -- bump when the public API changes; clients check this against the GitHub copy
+    Version = 23;         -- bump when the public API changes; clients check this against the GitHub copy
                           -- 14: AddSlider Info.Format(Value) -> display text
                           -- 15: AddDropdown Info.ValueIcons
                           -- 16: Groupbox:AddIconLabel
@@ -6526,6 +6527,12 @@ function Library:GetLayout()
     for _, Section in next, Library.Sections do
         local Entry = { Folded = Section.Folded };
 
+        for SubName, SubTab in next, Section.Tabbox and Section.Tabbox.Tabs or {} do
+            if Section.Tabbox.ActiveTab == SubTab then
+                Entry.Tab = SubName; -- the tabbox's sub-tab that was showing
+            end;
+        end;
+
         if Section.Floating then
             Entry.Float = { Section.Holder.Position.X.Offset, Section.Holder.Position.Y.Offset };
             Entry.Width = Section.Width;
@@ -6572,6 +6579,15 @@ function Library:ApplyLayout(Data)
                 Library:FloatSection(Section, tonumber(Entry.Float[1]) or 0, tonumber(Entry.Float[2]) or 0);
             elseif Entry.Side then
                 Library:DockSection(Section, tonumber(Entry.Side), tonumber(Entry.Order));
+            end;
+
+            -- a tabbox back on its sub-tab; without the switch animation, which shares its state with folding
+            local SubTab = Section.Tabbox and type(Entry.Tab) == 'string' and Section.Tabbox.Tabs[Entry.Tab];
+            if SubTab and Section.Tabbox.ActiveTab ~= SubTab then
+                local Animations = Library.Animations;
+                Library.Animations = false;
+                SubTab:Show();
+                Library.Animations = Animations;
             end;
 
             Library:SetSectionFolded(Section, Entry.Folded == true, true);
@@ -7495,6 +7511,9 @@ function Library:CreateWindow(...)
     --   COLUMN_PAD: the content box to the two columns of sections.
     local WINDOW_PAD = Glass and 2 or 8;
     local PANEL_PAD, COLUMN_PAD = 4, 4;
+    -- A column runs from the tab bar to the content box's bottom pad; its boxes start COLUMN_PAD below the bar
+    -- (a UIPadding), so rows scroll up to the bar itself, under the column's top shade (see the columns below).
+    local COLUMN_SHADE = 16;
 
     -- 1px outline pieces of the tab bar and content box. On glass the theme's outline color sinks into the blurred
     -- scene behind it, so it is lifted toward the font color (as the off toggle boxes are).
@@ -8106,6 +8125,7 @@ function Library:CreateWindow(...)
         BorderColor3 = 'OutlineColor';
     });
 
+
     -- Frosted glass: only Inner tints the window; the layers stacked on it go clear so the blur shows through.
     if Glass then
         Outer.BackgroundTransparency = 1;
@@ -8254,8 +8274,8 @@ function Library:CreateWindow(...)
         local LeftSide = Library:Create('ScrollingFrame', {
             BackgroundTransparency = 1;
             BorderSizePixel = 0;
-            Position = UDim2.new(0, COLUMN_PAD, 0, COLUMN_PAD);
-            Size = UDim2.new(0.5, -(COLUMN_PAD + 4), 1, -COLUMN_PAD * 2);
+            Position = UDim2.new(0, COLUMN_PAD, 0, 0);
+            Size = UDim2.new(0.5, -(COLUMN_PAD + 4), 1, -COLUMN_PAD);
             CanvasSize = UDim2.new(0, 0, 0, 0);
             BottomImage = '';
             TopImage = '';
@@ -8267,8 +8287,8 @@ function Library:CreateWindow(...)
         local RightSide = Library:Create('ScrollingFrame', {
             BackgroundTransparency = 1;
             BorderSizePixel = 0;
-            Position = UDim2.new(0.5, 4, 0, COLUMN_PAD);
-            Size = UDim2.new(0.5, -(COLUMN_PAD + 4), 1, -COLUMN_PAD * 2);
+            Position = UDim2.new(0.5, 4, 0, 0);
+            Size = UDim2.new(0.5, -(COLUMN_PAD + 4), 1, -COLUMN_PAD);
             CanvasSize = UDim2.new(0, 0, 0, 0);
             BottomImage = '';
             TopImage = '';
@@ -8295,11 +8315,12 @@ function Library:CreateWindow(...)
 
         for _, Side in next, { LeftSide, RightSide } do
             local Layout = Side:WaitForChild('UIListLayout');
+            Library:Create('UIPadding', { PaddingTop = UDim.new(0, COLUMN_PAD); Parent = Side });
             local function UpdateCanvas()
                 -- Layout bounds are screen pixels; CanvasSize offsets are unscaled UI pixels.
                 local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
                 local Scale = math.max(ScaleObject and ScaleObject.Scale or Library.UIScale or 1, 0.01);
-                Side.CanvasSize = UDim2.fromOffset(0, math.ceil(Layout.AbsoluteContentSize.Y / Scale) + 8);
+                Side.CanvasSize = UDim2.fromOffset(0, math.ceil(Layout.AbsoluteContentSize.Y / Scale) + 8 + COLUMN_PAD);
             end;
             Layout:GetPropertyChangedSignal('AbsoluteContentSize'):Connect(UpdateCanvas);
             Side:GetPropertyChangedSignal('AbsoluteSize'):Connect(UpdateCanvas);
@@ -8307,6 +8328,53 @@ function Library:CreateWindow(...)
                 Library:QueueLayoutSave(); -- the layout keeps where each column was left
             end);
             task.defer(UpdateCanvas);
+
+            -- A shade along each end of the column while there is more to scroll to that way: rows going under it fade
+            -- out instead of ending on a hard line. They grow and shrink in height: their transparency belongs to the
+            -- menu's open / close fade.
+            local function Shade(Bottom)
+                local Frame = Library:Create('Frame', {
+                    Name = Bottom and 'ColumnShadeBottom' or 'ColumnShadeTop';
+                    AnchorPoint = Vector2.new(0, Bottom and 1 or 0);
+                    BackgroundColor3 = Color3.new(0, 0, 0);
+                    BorderSizePixel = 0;
+                    Position = UDim2.new(Side.Position.X.Scale, Side.Position.X.Offset, Bottom and 1 or 0, Bottom and -COLUMN_PAD or 0);
+                    Size = UDim2.new(Side.Size.X.Scale, Side.Size.X.Offset, 0, 0);
+                    ZIndex = 13; -- over the column's boxes (their highest is 12), under the popups
+                    Parent = TabFrame;
+                });
+                Library:Create('UIGradient', {
+                    Rotation = Bottom and 270 or 90; -- dark at the column's edge
+                    Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.1);
+                        NumberSequenceKeypoint.new(0.4, 0.68);
+                        NumberSequenceKeypoint.new(1, 1);
+                    });
+                    Parent = Frame;
+                });
+                return { Frame = Frame, On = false };
+            end;
+
+            local Shades = { Top = Shade(false), Bottom = Shade(true) };
+            local function SetShade(Entry, On)
+                if Entry.On ~= On then
+                    Entry.On = On;
+                    Library:Animate(Entry.Frame, 0.15, { Size = UDim2.new(Side.Size.X.Scale, Side.Size.X.Offset, 0, On and COLUMN_SHADE or 0) });
+                end;
+            end;
+            local function UpdateShade()
+                local ScaleObject = Outer:FindFirstChildOfClass('UIScale');
+                local Scale = math.max(ScaleObject and ScaleObject.Scale or Library.UIScale or 1, 0.01);
+                local Above = Side.CanvasPosition.Y;
+                local Below = Side.AbsoluteCanvasSize.Y - Side.AbsoluteWindowSize.Y - Above;
+                -- the canvas starts on COLUMN_PAD and ends on 8 empty px (UpdateCanvas): nothing hidden there
+                SetShade(Shades.Top, Above > (COLUMN_PAD + 1) * Scale);
+                SetShade(Shades.Bottom, Below > 9 * Scale);
+            end;
+            for _, Property in next, { 'CanvasPosition', 'AbsoluteCanvasSize', 'AbsoluteWindowSize' } do
+                Side:GetPropertyChangedSignal(Property):Connect(UpdateShade);
+            end;
+            task.defer(UpdateShade);
         end;
 
         table.insert(LayoutTabs, { Name = Name, Tab = Tab, Window = Window, Left = LeftSide, Right = RightSide });
@@ -8600,6 +8668,7 @@ function Library:CreateWindow(...)
                 HeaderHeight = ContentTop;
             });
 
+            Section.Tabbox = Tabbox; -- the layout keeps which sub-tab was showing (Library:GetLayout)
             Section.ApplyFold = function()
                 for _, SubTab in next, Tabbox.Tabs do
                     SubTab.Container.Visible = (not Section.Folded) and Tabbox.ActiveTab == SubTab;
@@ -8826,6 +8895,9 @@ function Library:CreateWindow(...)
                     Container.Visible = not Section.Folded;
                     FadeLabel(0);
                     Tabbox:MoveUnderline(First); -- slides from the previous tab; the first one just appears
+                    if Switching then
+                        Library:QueueLayoutSave(); -- the layout keeps which sub-tab was showing
+                    end;
 
                     if Section.Animating then
                         if not Section.Switching then
